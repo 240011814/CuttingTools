@@ -8,14 +8,15 @@ import com.yhy.cutting.vo.Piece;
 import org.springframework.stereotype.Service;
 
 import java.util.*;
+import java.util.stream.IntStream;
 
 @Service
 public class CuttingOptimizerService {
 
     private static final double BIN_WIDTH = 2.0;
     private static final double BIN_HEIGHT = 2.0;
-    private static final int MAX_BINS = 10;
-    private static final int SCALE = 100; // 单位：厘米
+    private static final int MAX_BINS = 20;
+    private static final int SCALE = 1000; // 提高精度到毫米级
 
     public List<BinResult> optimize(List<Item> items) {
         if (items == null || items.isEmpty()) {
@@ -25,6 +26,8 @@ public class CuttingOptimizerService {
         Loader.loadNativeLibraries();
         CpModel model = new CpModel();
         int n = items.size();
+
+        System.out.println("优化项目数量: " + n);
 
         // ========== 变量定义 ==========
         IntVar[] binVars = new IntVar[n];
@@ -55,45 +58,30 @@ public class CuttingOptimizerService {
             model.addEquality(hVars[i], wi).onlyEnforceIf(rotated[i]);
         }
 
-        // ========== 手动添加不重叠约束（仅适用于小规模）==========
-        for (int i = 0; i < n; i++) {
-            for (int j = i + 1; j < n; j++) {
-                BoolVar binSame = model.newBoolVar("same_bin_" + i + "_" + j);
-                model.addEquality(binVars[i], binVars[j]).onlyEnforceIf(binSame);
-                model.addDifferent(binVars[i], binVars[j]).onlyEnforceIf(binSame.not());
+        // ========== 使用 NoOverlap2D 约束 ==========
+        // 为每个 bin 创建 NoOverlap2D 约束
+        for (int b = 0; b < MAX_BINS; b++) {
+            NoOverlap2dConstraint noOverlap2D = model.addNoOverlap2D();
 
-                // 四种不重叠情况：i 在 j 左、右、上、下
-                BoolVar left = model.newBoolVar("left_" + i + "_" + j);
-                BoolVar right = model.newBoolVar("right_" + i + "_" + j);
-                BoolVar below = model.newBoolVar("below_" + i + "_" + j);
-                BoolVar above = model.newBoolVar("above_" + i + "_" + j);
+            // 为当前 bin 收集所有可能的间隔变量
+            for (int i = 0; i < n; i++) {
+                BoolVar isInBin = model.newBoolVar("is_in_bin_" + i + "_" + b);
+                model.addEquality(binVars[i], b).onlyEnforceIf(isInBin);
+                model.addDifferent(binVars[i], b).onlyEnforceIf(isInBin.not());
 
-                // i 在 j 左边: x_i + w_i <= x_j
-                model.addLessOrEqual(
-                        LinearExpr.newBuilder().add(xVars[i]).add(wVars[i]).build(),
-                        xVars[j]
-                ).onlyEnforceIf(left);
+                // 创建结束变量
+                IntVar endX = model.newIntVar(0, (int)(BIN_WIDTH * SCALE), "end_x_" + i + "_" + b);
+                IntVar endY = model.newIntVar(0, (int)(BIN_HEIGHT * SCALE), "end_y_" + i + "_" + b);
 
-                // i 在 j 右边: x_j + w_j <= x_i
-                model.addLessOrEqual(
-                        LinearExpr.newBuilder().add(xVars[j]).add(wVars[j]).build(),
-                        xVars[i]
-                ).onlyEnforceIf(right);
+                // 约束结束位置 = 起始位置 + 尺寸
+                model.addEquality(endX, LinearExpr.newBuilder().add(xVars[i]).add(wVars[i]).build());
+                model.addEquality(endY, LinearExpr.newBuilder().add(yVars[i]).add(hVars[i]).build());
 
-                // i 在 j 下面: y_i + h_i <= y_j
-                model.addLessOrEqual(
-                        LinearExpr.newBuilder().add(yVars[i]).add(hVars[i]).build(),
-                        yVars[j]
-                ).onlyEnforceIf(below);
+                // 创建可选间隔变量并添加到 NoOverlap2D 约束中
+                IntervalVar xInterval = model.newOptionalIntervalVar(xVars[i], wVars[i], endX, isInBin, "x_interval_" + i + "_" + b);
+                IntervalVar yInterval = model.newOptionalIntervalVar(yVars[i], hVars[i], endY, isInBin, "y_interval_" + i + "_" + b);
 
-                // i 在 j 上面: y_j + h_j <= y_i
-                model.addLessOrEqual(
-                        LinearExpr.newBuilder().add(yVars[j]).add(hVars[j]).build(),
-                        yVars[i]
-                ).onlyEnforceIf(above);
-
-                // 必须满足至少一个方向不重叠（当在同一 bin）
-                model.addBoolOr(new BoolVar[]{left, right, below, above}).onlyEnforceIf(binSame);
+                noOverlap2D.addRectangle(xInterval, yInterval);
             }
         }
 
@@ -109,6 +97,44 @@ public class CuttingOptimizerService {
             );
         }
 
+        // ========== 对称性破缺约束 ==========
+        // 强制bin按使用顺序编号
+        for (int b = 1; b < MAX_BINS; b++) {
+            BoolVar usedBefore = model.newBoolVar("used_before_" + b);
+            BoolVar usedCurrent = model.newBoolVar("used_current_" + b);
+
+            // 检查前面是否有物品分配到bin b-1
+            List<BoolVar> assignedToPrev = new ArrayList<>();
+            for (int i = 0; i < n; i++) {
+                BoolVar assigned = model.newBoolVar("assigned_" + i + "_to_" + (b-1));
+                model.addEquality(binVars[i], b-1).onlyEnforceIf(assigned);
+                assignedToPrev.add(assigned);
+            }
+            if (!assignedToPrev.isEmpty()) {
+                model.addGreaterOrEqual(LinearExpr.sum(assignedToPrev.toArray(new BoolVar[0])), 1)
+                        .onlyEnforceIf(usedBefore);
+                model.addEquality(LinearExpr.sum(assignedToPrev.toArray(new BoolVar[0])), 0)
+                        .onlyEnforceIf(usedBefore.not());
+            }
+
+            // 检查当前bin是否被使用
+            List<BoolVar> assignedToCurrent = new ArrayList<>();
+            for (int i = 0; i < n; i++) {
+                BoolVar assigned = model.newBoolVar("assigned_" + i + "_to_" + b);
+                model.addEquality(binVars[i], b).onlyEnforceIf(assigned);
+                assignedToCurrent.add(assigned);
+            }
+            if (!assignedToCurrent.isEmpty()) {
+                model.addGreaterOrEqual(LinearExpr.sum(assignedToCurrent.toArray(new BoolVar[0])), 1)
+                        .onlyEnforceIf(usedCurrent);
+                model.addEquality(LinearExpr.sum(assignedToCurrent.toArray(new BoolVar[0])), 0)
+                        .onlyEnforceIf(usedCurrent.not());
+            }
+
+            // 如果当前bin被使用，前面的bin必须也被使用
+            model.addImplication(usedCurrent, usedBefore);
+        }
+
         // ========== 目标：最小化使用的 bin 数量 ==========
         BoolVar[] usedBins = new BoolVar[MAX_BINS];
         for (int b = 0; b < MAX_BINS; b++) {
@@ -117,29 +143,67 @@ public class CuttingOptimizerService {
             for (int i = 0; i < n; i++) {
                 isAssigned[i] = model.newBoolVar("assign_" + i + "_" + b);
                 model.addEquality(binVars[i], b).onlyEnforceIf(isAssigned[i]);
+                model.addDifferent(binVars[i], b).onlyEnforceIf(isAssigned[i].not());
             }
 
-            // 使用 LinearExpr.sum(BoolVar[]) 求和
             LinearExpr numAssigned = LinearExpr.sum(isAssigned);
-
-            // 如果至少一个 item 分配到 bin b，则 usedBins[b] = 1
             model.addGreaterOrEqual(numAssigned, 1).onlyEnforceIf(usedBins[b]);
-            // 如果没有 item 分配到 bin b，则 usedBins[b] = 0
             model.addEquality(numAssigned, 0).onlyEnforceIf(usedBins[b].not());
         }
 
-// 总共使用的 bin 数量
         IntVar numUsed = model.newIntVar(0, MAX_BINS, "num_used");
         model.addEquality(numUsed, LinearExpr.sum(usedBins));
         model.minimize(numUsed);
 
+        // ========== 添加决策策略 ==========
+        // 按物品面积降序排列，优先处理大物品
+        List<Integer> itemIndices = new ArrayList<>();
+        for (int i = 0; i < n; i++) {
+            itemIndices.add(i);
+        }
+        itemIndices.sort((i, j) -> {
+            double areaI = items.get(i).getWidth() * items.get(i).getHeight();
+            double areaJ = items.get(j).getWidth() * items.get(j).getHeight();
+            return Double.compare(areaJ, areaI); // 降序
+        });
+
+        // 为大物品添加决策策略
+        List<LinearArgument> decisionVars = new ArrayList<>();
+        for (int i : itemIndices) {
+            decisionVars.add(binVars[i]);
+            decisionVars.add(xVars[i]);
+            decisionVars.add(yVars[i]);
+        }
+
+        if (!decisionVars.isEmpty()) {
+            model.addDecisionStrategy(
+                    decisionVars.toArray(new LinearArgument[0]),
+                    DecisionStrategyProto.VariableSelectionStrategy.CHOOSE_LOWEST_MIN,
+                    DecisionStrategyProto.DomainReductionStrategy.SELECT_MIN_VALUE
+            );
+        }
+
         // ========== 求解 ==========
         CpSolver solver = new CpSolver();
-        solver.getParameters().setMaxTimeInSeconds(30);
+
+        // 优化求解器参数
+        SatParameters.Builder parameters = solver.getParameters();
+        parameters.setMaxTimeInSeconds(120); // 增加到120秒
+        parameters.setNumWorkers(1); // 使用单线程确保确定性
+   //     parameters.setLogSearchProgress(false); // 减少日志输出
+        parameters.setCpModelProbingLevel(2); // 增强探测
+        parameters.setCpModelPresolve(true);
+        parameters.setUseOptionalVariables(true);
+        parameters.setSearchBranching(SatParameters.SearchBranching.FIXED_SEARCH); // 固定搜索策略
+
+        solver.getParameters().mergeFrom(parameters.build());
+
+        System.out.println("开始求解...");
         CpSolverStatus status = solver.solve(model);
 
         List<BinResult> results = new ArrayList<>();
         if (status == CpSolverStatus.OPTIMAL || status == CpSolverStatus.FEASIBLE) {
+            System.out.println("求解完成: " + status);
             Map<Integer, BinResult> map = new HashMap<>();
             double totalArea = BIN_WIDTH * BIN_HEIGHT;
 
@@ -154,10 +218,10 @@ public class CuttingOptimizerService {
 
                 Piece p = new Piece();
                 p.setLabel(items.get(i).getLabel());
-                p.setX(solver.value(xVars[i]) / (double)SCALE);
-                p.setY(solver.value(yVars[i]) / (double)SCALE);
-                p.setW(solver.value(wVars[i]) / (double)SCALE);
-                p.setH(solver.value(hVars[i]) / (double)SCALE);
+                p.setX(Math.round(solver.value(xVars[i]) / (double)SCALE * 1000.0) / 1000.0); // 保留3位小数
+                p.setY(Math.round(solver.value(yVars[i]) / (double)SCALE * 1000.0) / 1000.0);
+                p.setW(Math.round(solver.value(wVars[i]) / (double)SCALE * 1000.0) / 1000.0);
+                p.setH(Math.round(solver.value(hVars[i]) / (double)SCALE * 1000.0) / 1000.0);
                 p.setRotated(solver.value(rotated[i]) > 0.5);
 
                 map.get(binId).getPieces().add(p);
@@ -166,11 +230,18 @@ public class CuttingOptimizerService {
             for (BinResult br : map.values()) {
                 double usedArea = br.getPieces().stream().mapToDouble(p -> p.getW() * p.getH()).sum();
                 double utilization = (usedArea / totalArea) * 100;
-                br.setUtilization(Math.round(utilization * 10.0) / 10.0);
+                br.setUtilization(Math.round(utilization * 100.0) / 100.0); // 保留两位小数
             }
 
             results.addAll(map.values());
             results.sort(Comparator.comparingInt(BinResult::getBinId));
+
+            System.out.println("使用bin数量: " + results.size());
+            for (BinResult br : results) {
+                System.out.println("Bin " + br.getBinId() + ": " + br.getPieces().size() + " 个项目, 利用率: " + br.getUtilization() + "%");
+            }
+        } else {
+            System.out.println("求解失败: " + status);
         }
 
         return results;

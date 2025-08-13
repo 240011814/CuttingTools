@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Bin Packing Visualization</title>
+    <style>
+        .bin-container { display: flex; flex-wrap: wrap; gap: 20px; margin-top: 20px; }
+        canvas { border: 1px solid black; }
+        table { border-collapse: collapse; margin-top: 10px; }
+        th, td { border: 1px solid #ccc; padding: 5px; }
+        input { width: 80px; }
+        .quantity-input { width: 60px; }
+    </style>
+</head>
+<body>
+<h1>Cutting Optimizer Visualization</h1>
+
+<!-- 添加矩形输入 -->
+<div>
+    <input type="text" id="label" placeholder="Label">
+    <input type="number" id="width" placeholder="Width(cm)" step="0.1" min="0.1">
+    <input type="number" id="height" placeholder="Height(cm)" step="0.1" min="0.1">
+    <input type="number" id="quantity" placeholder="数量" class="quantity-input" value="1" min="1">
+    <button onclick="addItem()">添加矩形</button>
+    <button onclick="runOptimization()">开始优化</button>
+    <button onclick="clearAll()">清空所有</button>
+</div>
+
+<!-- 矩形列表 -->
+<table id="itemTable">
+    <thead>
+    <tr>
+        <th>Label</th>
+        <th>Width (cm)</th>
+        <th>Height (cm)</th>
+        <th>数量</th>
+        <th>操作</th>
+    </tr>
+    </thead>
+    <tbody></tbody>
+</table>
+
+<!-- 结果画布 -->
+<div id="bins" class="bin-container"></div>
+
+<script>
+    let items = [];
+
+    function addItem() {
+        const label = document.getElementById('label').value.trim();
+        const width = parseFloat(document.getElementById('width').value);
+        const height = parseFloat(document.getElementById('height').value);
+        const quantity = parseInt(document.getElementById('quantity').value);
+
+        if (!label || isNaN(width) || isNaN(height) || isNaN(quantity) ||
+            width <= 0 || height <= 0 || quantity <= 0) {
+            alert("请输入有效的矩形参数！");
+            return;
+        }
+
+        // 检查是否已存在相同标签的项目
+        const existingIndex = items.findIndex(item => item.label === label);
+        if (existingIndex !== -1) {
+            // 如果存在，更新数量
+            items[existingIndex].quantity = quantity;
+        } else {
+            // 如果不存在，添加新项目
+            items.push({label, width, height, quantity});
+        }
+
+        renderTable();
+
+        // 清空输入
+        document.getElementById('label').value = '';
+        document.getElementById('width').value = '';
+        document.getElementById('height').value = '';
+        document.getElementById('quantity').value = '1';
+    }
+
+    function removeItem(index) {
+        items.splice(index, 1);
+        renderTable();
+    }
+
+    function clearAll() {
+        items = [];
+        renderTable();
+        document.getElementById('bins').innerHTML = '';
+    }
+
+    function renderTable() {
+        const tbody = document.querySelector('#itemTable tbody');
+        tbody.innerHTML = '';
+        items.forEach((item, index) => {
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+      <td>${item.label}</td>
+      <td>${item.width.toFixed(1)}</td>
+      <td>${item.height.toFixed(1)}</td>
+      <td>${item.quantity}</td>
+      <td><button onclick="removeItem(${index})">删除</button></td>
+    `;
+            tbody.appendChild(tr);
+        });
+    }
+
+    async function runOptimization() {
+        if (items.length === 0) {
+            alert("请先添加至少一个矩形！");
+            return;
+        }
+
+        // 展开数量：将每个项目根据数量生成多个实例
+        const expandedItems = [];
+        items.forEach(item => {
+            for (let i = 0; i < item.quantity; i++) {
+                expandedItems.push({
+                    label: `${item.label}_${i + 1}`,
+                    width: item.width,
+                    height: item.height
+                });
+            }
+        });
+
+        // API 接口是米，这里厘米 → 米
+        const payload = expandedItems.map(i => ({
+            label: i.label,
+            width: +(i.width / 100).toFixed(3),
+            height: +(i.height / 100).toFixed(3)
+        }));
+
+        try {
+            const response = await fetch("http://localhost:8080/api/optimize", {
+                method: "POST",
+                headers: {"Content-Type": "application/json"},
+                body: JSON.stringify(payload)
+            });
+
+            if (!response.ok) {
+                throw new Error(response.statusText);
+            }
+
+            const results = await response.json();
+            drawBins(results);
+        } catch (error) {
+            alert("API 调用失败: " + error.message);
+        }
+    }
+
+    function drawBins(results) {
+        const container = document.getElementById('bins');
+        container.innerHTML = ""; // 清空旧画布
+
+        const scale = 1; // 1厘米 → 1px
+
+        results.forEach(bin => {
+            const canvas = document.createElement('canvas');
+            canvas.width = 200; // 200cm (2m)
+            canvas.height = 200;
+            const ctx = canvas.getContext('2d');
+
+            // 绘制bin边界
+            ctx.strokeStyle = 'black';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(0, 0, 200, 200);
+
+            // 绘制bin标题和利用率
+            ctx.fillStyle = 'black';
+            ctx.font = '12px Arial';
+            ctx.fillText(`Bin ${bin.binId} (${bin.utilization}%)`, 5, 15);
+
+            // 绘制每个piece
+            bin.pieces.forEach(piece => {
+                const color = '#' + Math.floor(Math.random()*16777215).toString(16);
+                // 确保颜色不会太浅
+                const finalColor = color === '#ffffff' ? '#cccccc' : color;
+
+                // 绘制填充
+                ctx.fillStyle = finalColor;
+                ctx.fillRect(piece.x*100*scale, piece.y*100*scale, piece.w*100*scale, piece.h*100*scale);
+
+                // 绘制边框
+                ctx.strokeStyle = 'black';
+                ctx.lineWidth = 1;
+                ctx.strokeRect(piece.x*100*scale, piece.y*100*scale, piece.w*100*scale, piece.h*100*scale);
+
+                // 绘制标签
+                ctx.fillStyle = 'black';
+                ctx.font = '10px Arial';
+                ctx.fillText(piece.label, piece.x*100*scale + 2, piece.y*100*scale + 12);
+
+                // 如果是旋转的，添加旋转标记
+                if (piece.rotated) {
+                    ctx.fillStyle = 'red';
+                    ctx.font = '8px Arial';
+                    ctx.fillText('R', piece.x*100*scale + 2, piece.y*100*scale + 22);
+                }
+            });
+
+            container.appendChild(canvas);
+        });
+    }
+
+    // 回车键添加项目
+    document.addEventListener('keypress', function(e) {
+        if (e.key === 'Enter') {
+            addItem();
+        }
+    });
+</script>
+</body>
+</html>
