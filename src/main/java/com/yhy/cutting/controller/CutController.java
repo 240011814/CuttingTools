@@ -11,8 +11,10 @@ import com.google.ortools.sat.CpSolver;
 import com.google.ortools.sat.CpSolverStatus;
 import com.google.ortools.sat.IntVar;
 import com.yhy.cutting.service.CuttingOptimizerService;
+import com.yhy.cutting.service.MaxRectsCuttingService;
 import com.yhy.cutting.vo.BinResult;
 import com.yhy.cutting.vo.Item;
+import com.yhy.cutting.vo.MaterialType;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -20,19 +22,43 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 @RestController
 public class CutController {
 
     private final CuttingOptimizerService optimizerService;
+    private final MaxRectsCuttingService maxRectsCuttingService;
 
-    public CutController(CuttingOptimizerService optimizerService) {
+    public CutController(CuttingOptimizerService optimizerService,
+                         MaxRectsCuttingService maxRectsCuttingService) {
         this.optimizerService = optimizerService;
+        this.maxRectsCuttingService = maxRectsCuttingService;
     }
 
-    @PostMapping("/api/optimize")
-    public List<BinResult> optimize(@RequestBody List<Item> items) {
-        return optimizerService.optimize(items);
+    // 在你的Controller中添加新端点
+    @PostMapping("/api/optimize-with-materials")
+    public List<BinResult> optimizeWithMaterials(@RequestBody Map<String, Object> request) {
+        List<Map<String, Object>> itemMaps = (List<Map<String, Object>>) request.get("items");
+        List<Map<String, Object>> materialMaps = (List<Map<String, Object>>) request.get("materials");
+
+        List<Item> items = itemMaps.stream()
+                .map(map -> new Item(
+                        (String) map.get("label"),
+                        ((Number) map.get("width")).doubleValue(),
+                        ((Number) map.get("height")).doubleValue()
+                )).collect(Collectors.toList());
+
+        List<MaterialType> materials = materialMaps.stream()
+                .map(map -> new MaterialType(
+                        (String) map.get("name"),
+                        ((Number) map.get("width")).doubleValue(),
+                        ((Number) map.get("height")).doubleValue(),
+                        ((Number) map.get("availableCount")).intValue()
+                )).collect(Collectors.toList());
+
+        return maxRectsCuttingService.optimize(items, materials);
     }
 
 
