@@ -6,13 +6,17 @@ import com.yhy.cutting.vo.MaterialType;
 import com.yhy.cutting.vo.Piece;
 import org.springframework.stereotype.Service;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.util.*;
 
 @Service
 public class MaxRectsCuttingService {
 
+    private static final int SCALE = 2;
+
     public List<BinResult> optimize(List<Item> items, List<MaterialType> availableMaterials) {
-        if (items == null || items.isEmpty() ) {
+        if (items == null || items.isEmpty()) {
             return Collections.emptyList();
         }
 
@@ -34,12 +38,18 @@ public class MaxRectsCuttingService {
         materials.sort((a, b) -> {
             int cmp = Integer.compare(b.priority, a.priority);
             if (cmp != 0) return cmp;
-            return Double.compare(b.width * b.height, a.width * a.height);
+            BigDecimal areaB = b.width.multiply(b.height);
+            BigDecimal areaA = a.width.multiply(a.height);
+            return areaB.compareTo(areaA);
         });
 
         // 按面积从大到小排序物品
         List<Item> itemsSorted = new ArrayList<>(items);
-        itemsSorted.sort((a, b) -> Double.compare(b.getWidth() * b.getHeight(), a.getWidth() * a.getHeight()));
+        itemsSorted.sort((a, b) -> {
+            BigDecimal areaB = BigDecimal.valueOf(b.getWidth()).multiply(BigDecimal.valueOf(b.getHeight()));
+            BigDecimal areaA = BigDecimal.valueOf(a.getWidth()).multiply(BigDecimal.valueOf(a.getHeight()));
+            return areaB.compareTo(areaA);
+        });
 
         List<BinResult> results = new ArrayList<>();
         List<MaxRectsBin> bins = new ArrayList<>();
@@ -51,7 +61,11 @@ public class MaxRectsCuttingService {
             // 尝试放入已有 bin
             for (int i = 0; i < bins.size(); i++) {
                 MaxRectsBin bin = bins.get(i);
-                MaxRectsBin.Rect rect = bin.insert(item.getWidth(), item.getHeight(), true);
+                MaxRectsBin.Rect rect = bin.insert(
+                        BigDecimal.valueOf(item.getWidth()),
+                        BigDecimal.valueOf(item.getHeight()),
+                        true
+                );
                 if (rect != null) {
                     results.get(i).getPieces().add(createPiece(item, rect));
                     placed = true;
@@ -63,7 +77,8 @@ public class MaxRectsCuttingService {
             if (!placed) {
                 MaterialInstance selectedMaterial = null;
                 for (MaterialInstance m : materials) {
-                    if (item.getWidth() <= m.width && item.getHeight() <= m.height) {
+                    if (BigDecimal.valueOf(item.getWidth()).compareTo(m.width) <= 0 &&
+                            BigDecimal.valueOf(item.getHeight()).compareTo(m.height) <= 0) {
                         selectedMaterial = m;
                         break;
                     }
@@ -71,19 +86,22 @@ public class MaxRectsCuttingService {
                 if (selectedMaterial == null) continue;
 
                 MaxRectsBin bin = new MaxRectsBin(selectedMaterial.width, selectedMaterial.height);
-                MaxRectsBin.Rect rect = bin.insert(item.getWidth(), item.getHeight(), true);
+                MaxRectsBin.Rect rect = bin.insert(
+                        BigDecimal.valueOf(item.getWidth()),
+                        BigDecimal.valueOf(item.getHeight()),
+                        true
+                );
                 if (rect != null) {
                     bins.add(bin);
 
                     BinResult br = new BinResult();
                     br.setBinId(binId++);
                     br.setMaterialType(selectedMaterial.name);
-                    br.setMaterialWidth(selectedMaterial.width);
-                    br.setMaterialHeight(selectedMaterial.height);
+                    br.setMaterialWidth(selectedMaterial.width.doubleValue());
+                    br.setMaterialHeight(selectedMaterial.height.doubleValue());
                     br.setPieces(new ArrayList<>(Collections.singletonList(createPiece(item, rect))));
                     results.add(br);
 
-                    // 已使用一块材料，从列表中移除
                     materials.remove(selectedMaterial);
                 }
             }
@@ -91,9 +109,15 @@ public class MaxRectsCuttingService {
 
         // 更新利用率
         for (BinResult br : results) {
-            double usedArea = br.getPieces().stream().mapToDouble(p -> p.getW() * p.getH()).sum();
-            double totalArea = br.getMaterialWidth() * br.getMaterialHeight();
-            br.setUtilization(Math.round((usedArea / totalArea) * 10000.0) / 100.0);
+            BigDecimal usedArea = br.getPieces().stream()
+                    .map(p -> BigDecimal.valueOf(p.getW()).multiply(BigDecimal.valueOf(p.getH())))
+                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+            BigDecimal totalArea = BigDecimal.valueOf(br.getMaterialWidth())
+                    .multiply(BigDecimal.valueOf(br.getMaterialHeight()));
+            BigDecimal utilization = usedArea.divide(totalArea, SCALE + 2, RoundingMode.HALF_UP)
+                    .multiply(BigDecimal.valueOf(100))
+                    .setScale(SCALE, RoundingMode.HALF_UP);
+            br.setUtilization(utilization.doubleValue());
         }
 
         return results;
@@ -102,48 +126,45 @@ public class MaxRectsCuttingService {
     private Piece createPiece(Item item, MaxRectsBin.Rect rect) {
         Piece p = new Piece();
         p.setLabel(item.getLabel());
-        p.setX(rect.x);
-        p.setY(rect.y);
-        p.setW(rect.width);
-        p.setH(rect.height);
+        p.setX(rect.x.doubleValue());
+        p.setY(rect.y.doubleValue());
+        p.setW(rect.width.doubleValue());
+        p.setH(rect.height.doubleValue());
         p.setRotated(rect.rotated);
         return p;
     }
 
     private static class MaxRectsBin {
-        private double width, height;
+        private BigDecimal width, height;
         private List<Rect> freeRectangles;
 
-        public MaxRectsBin(double width, double height) {
+        public MaxRectsBin(BigDecimal width, BigDecimal height) {
             this.width = width;
             this.height = height;
             freeRectangles = new ArrayList<>();
-            freeRectangles.add(new Rect(0, 0, width, height, false));
+            freeRectangles.add(new Rect(BigDecimal.ZERO, BigDecimal.ZERO, width, height, false));
         }
 
-        public Rect insert(double w, double h, boolean allowRotate) {
+        public Rect insert(BigDecimal w, BigDecimal h, boolean allowRotate) {
             Rect bestRect = null;
-            double bestAreaFit = Double.MAX_VALUE;
+            BigDecimal bestAreaFit = new BigDecimal(Double.MAX_VALUE);
 
-            // 按行优先、列靠左排序自由矩形
             freeRectangles.sort((a, b) -> {
-                if (a.y != b.y) return Double.compare(a.y, b.y);
-                return Double.compare(a.x, b.x);
+                int cmp = a.y.compareTo(b.y);
+                return cmp != 0 ? cmp : a.x.compareTo(b.x);
             });
 
             for (Rect free : freeRectangles) {
-                // 不旋转
-                if (w <= free.width && h <= free.height) {
-                    double areaFit = free.width * free.height - w * h;
-                    if (areaFit < bestAreaFit) {
+                if (w.compareTo(free.width) <= 0 && h.compareTo(free.height) <= 0) {
+                    BigDecimal areaFit = free.width.multiply(free.height).subtract(w.multiply(h));
+                    if (areaFit.compareTo(bestAreaFit) < 0) {
                         bestRect = new Rect(free.x, free.y, w, h, false);
                         bestAreaFit = areaFit;
                     }
                 }
-                // 旋转
-                if (allowRotate && h <= free.width && w <= free.height) {
-                    double areaFit = free.width * free.height - h * w;
-                    if (areaFit < bestAreaFit) {
+                if (allowRotate && h.compareTo(free.width) <= 0 && w.compareTo(free.height) <= 0) {
+                    BigDecimal areaFit = free.width.multiply(free.height).subtract(h.multiply(w));
+                    if (areaFit.compareTo(bestAreaFit) < 0) {
                         bestRect = new Rect(free.x, free.y, h, w, true);
                         bestAreaFit = areaFit;
                     }
@@ -165,24 +186,27 @@ public class MaxRectsCuttingService {
         }
 
         private void splitFreeRectangle(Rect free, Rect placed, List<Rect> newFree) {
-            if (placed.x < free.x + free.width && placed.x + placed.width > free.x) {
-                if (placed.y > free.y) {
-                    double height = placed.y - free.y;
-                    if (height > 0) newFree.add(new Rect(free.x, free.y, free.width, height, false));
+            BigDecimal zero = BigDecimal.ZERO;
+
+            if (placed.x.compareTo(free.x.add(free.width)) < 0 && placed.x.add(placed.width).compareTo(free.x) > 0) {
+                if (placed.y.compareTo(free.y) > 0) {
+                    BigDecimal height = placed.y.subtract(free.y);
+                    if (height.compareTo(zero) > 0) newFree.add(new Rect(free.x, free.y, free.width, height, false));
                 }
-                if (placed.y + placed.height < free.y + free.height) {
-                    double height = free.y + free.height - (placed.y + placed.height);
-                    if (height > 0) newFree.add(new Rect(free.x, placed.y + placed.height, free.width, height, false));
+                if (placed.y.add(placed.height).compareTo(free.y.add(free.height)) < 0) {
+                    BigDecimal height = free.y.add(free.height).subtract(placed.y.add(placed.height));
+                    if (height.compareTo(zero) > 0) newFree.add(new Rect(free.x, placed.y.add(placed.height), free.width, height, false));
                 }
             }
-            if (placed.y < free.y + free.height && placed.y + placed.height > free.y) {
-                if (placed.x > free.x) {
-                    double width = placed.x - free.x;
-                    if (width > 0) newFree.add(new Rect(free.x, free.y, width, free.height, false));
+
+            if (placed.y.compareTo(free.y.add(free.height)) < 0 && placed.y.add(placed.height).compareTo(free.y) > 0) {
+                if (placed.x.compareTo(free.x) > 0) {
+                    BigDecimal width = placed.x.subtract(free.x);
+                    if (width.compareTo(zero) > 0) newFree.add(new Rect(free.x, free.y, width, free.height, false));
                 }
-                if (placed.x + placed.width < free.x + free.width) {
-                    double width = free.x + free.width - (placed.x + placed.width);
-                    if (width > 0) newFree.add(new Rect(placed.x + placed.width, free.y, width, free.height, false));
+                if (placed.x.add(placed.width).compareTo(free.x.add(free.width)) < 0) {
+                    BigDecimal width = free.x.add(free.width).subtract(placed.x.add(placed.width));
+                    if (width.compareTo(zero) > 0) newFree.add(new Rect(placed.x.add(placed.width), free.y, width, free.height, false));
                 }
             }
         }
@@ -206,28 +230,42 @@ public class MaxRectsCuttingService {
         }
 
         private boolean intersect(Rect a, Rect b) {
-            return !(b.x >= a.x + a.width || b.x + b.width <= a.x || b.y >= a.y + a.height || b.y + b.height <= a.y);
+            return !(b.x.compareTo(a.x.add(a.width)) >= 0 ||
+                    b.x.add(b.width).compareTo(a.x) <= 0 ||
+                    b.y.compareTo(a.y.add(a.height)) >= 0 ||
+                    b.y.add(b.height).compareTo(a.y) <= 0);
         }
 
         private boolean isContainedIn(Rect a, Rect b) {
-            return a.x >= b.x && a.y >= b.y && a.x + a.width <= b.x + b.width && a.y + a.height <= b.y + b.height;
+            return a.x.compareTo(b.x) >= 0 && a.y.compareTo(b.y) >= 0 &&
+                    a.x.add(a.width).compareTo(b.x.add(b.width)) <= 0 &&
+                    a.y.add(a.height).compareTo(b.y.add(b.height)) <= 0;
         }
 
         public static class Rect {
-            public double x, y, width, height;
+            public BigDecimal x, y, width, height;
             public boolean rotated;
-            public Rect(double x, double y, double width, double height, boolean rotated) {
-                this.x = x; this.y = y; this.width = width; this.height = height; this.rotated = rotated;
+
+            public Rect(BigDecimal x, BigDecimal y, BigDecimal width, BigDecimal height, boolean rotated) {
+                this.x = x.setScale(SCALE, RoundingMode.HALF_UP);
+                this.y = y.setScale(SCALE, RoundingMode.HALF_UP);
+                this.width = width.setScale(SCALE, RoundingMode.HALF_UP);
+                this.height = height.setScale(SCALE, RoundingMode.HALF_UP);
+                this.rotated = rotated;
             }
         }
     }
 
     private static class MaterialInstance {
         public String name;
-        public double width, height;
+        public BigDecimal width, height;
         public int priority;
+
         public MaterialInstance(String name, double w, double h, int priority) {
-            this.name = name; this.width = w; this.height = h; this.priority = priority;
+            this.name = name;
+            this.width = BigDecimal.valueOf(w).setScale(SCALE, RoundingMode.HALF_UP);
+            this.height = BigDecimal.valueOf(h).setScale(SCALE, RoundingMode.HALF_UP);
+            this.priority = priority;
         }
     }
 }
