@@ -12,7 +12,7 @@ import java.util.*;
 public class MaxRectsCuttingService {
 
     public List<BinResult> optimize(List<Item> items, List<MaterialType> availableMaterials) {
-        if (items == null || items.isEmpty() || availableMaterials == null || availableMaterials.isEmpty()) {
+        if (items == null || items.isEmpty() ) {
             return Collections.emptyList();
         }
 

@@ -32,7 +32,7 @@ public class CuttingOptimizerService {
 
             List<MaterialInstance> materialInstances = prepareMaterialInstances(sortedMaterials);
 
-            for (int i = 0; i < 25; i++) {
+            for (int i = 0; i < 100; i++) {
                 materialInstances.add(new MaterialInstance("新2x2板材", 2.0, 2.0));
             }
 

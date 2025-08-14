@@ -260,7 +260,7 @@
         };
 
         try {
-            const response = await fetch("http://localhost:8080/api/optimize-with-materials", {
+            const response = await fetch("/api/optimize-with-materials", {
                 method: "POST",
                 headers: {"Content-Type": "application/json"},
                 body: JSON.stringify(payload)
