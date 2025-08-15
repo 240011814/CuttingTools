@@ -260,7 +260,7 @@
         };
 
         try {
-            const response = await fetch("/api/optimize-with-materials", {
+            const response = await fetch("/cut/plane", {
                 method: "POST",
                 headers: {"Content-Type": "application/json"},
                 body: JSON.stringify(payload)

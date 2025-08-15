@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <title>材料裁剪可视化（每行显示）</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        table { border-collapse: collapse; margin-bottom: 15px; }
+        td, th { border: 1px solid #ccc; padding: 5px; text-align: center; }
+        .bar-label { margin-bottom: 4px; font-weight: bold; }
+        #canvasWrapper {
+            overflow-x: auto;
+            border: 1px solid #aaa;
+            padding: 10px 0;
+            cursor: grab;
+            width: 100%;
+        }
+        .bar-wrapper {
+            display: block;
+            margin-bottom: 20px;
+        }
+        .bar {
+            display: flex;
+            flex-wrap: nowrap;
+            height: 40px;
+        }
+        .cut {
+            display: block;
+            height: 100%;
+            color: white;
+            text-align: center;
+            line-height: 40px;
+            font-size: 14px;
+        }
+        .cut.remaining {
+            background-color: #ccc;
+            color: black;
+        }
+        .unit-input {
+            position: relative;
+            display: inline-block;
+        }
+        .unit-input input {
+            padding-right: 30px;
+        }
+        .unit-input::after {
+            content: "cm";
+            position: absolute;
+            right: 10px;
+            top: 50%;
+            transform: translateY(-50%);
+            color: #555;
+            pointer-events: none;
+        }
+        button { margin-left: 5px; }
+
+        /* loading 弹窗样式 */
+        #loadingOverlay {
+            display: none;
+            position: fixed;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            background: rgba(0,0,0,0.4);
+            z-index: 1000;
+            text-align: center;
+            color: white;
+            font-size: 24px;
+        }
+        .spinner {
+            width: 50px;
+            height: 50px;
+            border: 6px solid #ccc;
+            border-top-color: #1e90ff;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto;
+        }
+        @keyframes spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+
+<h2>材料裁剪可视化</h2>
+
+<h3>裁剪尺寸</h3>
+<div class="unit-input"><input type="number" step="0.1" id="itemLength" placeholder="长度"></div>
+数量：<input type="number" id="itemQty">
+<button onclick="addItem()">添加尺寸</button>
+<table id="itemsList">
+    <tr><th>长度</th><th>数量</th><th>操作</th></tr>
+</table>
+
+<h3>材料库存</h3>
+<div class="unit-input"><input type="number" id="matLength" placeholder="长度"></div>
+数量：<input type="number" id="matQty">
+<button onclick="addMaterial()">添加材料</button>
+<table id="materialsList">
+    <tr><th>长度</th><th>数量</th><th>操作</th></tr>
+</table>
+
+<h3>新材料长度</h3>
+<div class="unit-input"><input type="number" id="newMaterialLength" value="600"></div>
+
+<br><br>
+<button onclick="fetchData()">获取并绘制</button>
+<button onclick="clearAll()">清除所有数据</button>
+
+<h3>结果统计</h3>
+<div id="stats" style="margin-bottom: 20px; font-weight: bold;"></div>
+
+<div id="canvasWrapper">
+    <div id="bars"></div>
+</div>
+
+<!-- loading 弹窗 -->
+<div id="loadingOverlay">
+    <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);">
+        <div class="spinner"></div>
+        <div style="margin-top: 10px;">计算中...</div>
+    </div>
+</div>
+
+<script>
+    let itemsData = [];
+    let materialsData = [];
+    let scaleFactor = 1, isDragging = false, startX, scrollLeft;
+
+    function addItem() {
+        const lenInput = document.getElementById("itemLength");
+        const qtyInput = document.getElementById("itemQty");
+        const len = parseFloat(lenInput.value);
+        const qty = parseInt(qtyInput.value);
+        if (!isNaN(len) && !isNaN(qty) && qty > 0) {
+            itemsData.push({ length: len, qty });
+            renderList("itemsList", itemsData);
+            lenInput.value = "";
+            qtyInput.value = "";
+        }
+    }
+
+    function addMaterial() {
+        const lenInput = document.getElementById("matLength");
+        const qtyInput = document.getElementById("matQty");
+        const len = parseFloat(lenInput.value);
+        const qty = parseInt(qtyInput.value);
+        if (!isNaN(len) && !isNaN(qty) && qty > 0) {
+            materialsData.push({ length: len, qty });
+            renderList("materialsList", materialsData);
+            lenInput.value = "";
+            qtyInput.value = "";
+        }
+    }
+
+    function removeFromList(listName, index) {
+        if (listName === "items") itemsData.splice(index, 1);
+        else materialsData.splice(index, 1);
+        renderList(listName === "items" ? "itemsList" : "materialsList", listName === "items" ? itemsData : materialsData);
+    }
+
+    function renderList(tableId, data) {
+        const table = document.getElementById(tableId);
+        table.innerHTML = `<tr><th>长度</th><th>数量</th><th>操作</th></tr>`;
+        data.forEach((item, i) => {
+            const row = table.insertRow();
+            row.innerHTML = `<td>${item.length}cm</td><td>${item.qty}</td><td><button onclick="removeFromList('${tableId === "itemsList" ? "items" : "materials"}',${i})">删除</button></td>`;
+        });
+    }
+
+    function clearAll() {
+        itemsData = [];
+        materialsData = [];
+        renderList("itemsList", itemsData);
+        renderList("materialsList", materialsData);
+        document.getElementById("bars").innerHTML = "";
+        document.getElementById("stats").textContent = "";
+    }
+
+    function fetchData() {
+        const loading = document.getElementById("loadingOverlay");
+        loading.style.display = "block"; // 显示弹窗
+
+        const items = [];
+        itemsData.forEach(i => { for (let n = 0; n < i.qty; n++) items.push(i.length); });
+
+        const materials = [];
+        materialsData.forEach(m => { for (let n = 0; n < m.qty; n++) materials.push(m.length); });
+
+        const newMaterialLength = parseFloat(document.getElementById("newMaterialLength").value);
+
+        fetch("/cut/bar", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ items, materials, newMaterialLength })
+        })
+            .then(res => res.json())
+            .then(data => {
+                renderBars(data);
+                loading.style.display = "none"; // 隐藏弹窗
+            })
+            .catch(err => {
+                console.error("请求失败:", err);
+                loading.style.display = "none"; // 隐藏弹窗
+            });
+    }
+
+    function renderBars(data) {
+        const container = document.getElementById("bars");
+        container.innerHTML = "";
+
+        if (data.length === 0) {
+            document.getElementById("stats").textContent = "暂无数据";
+            return;
+        }
+
+        // 统计信息
+        let totalMaterials = data.length;
+        let totalLength = 0;
+        let totalUsed = 0;
+        let totalRemaining = 0;
+
+        data.forEach(item => {
+            totalLength += item.totalLength;
+            totalUsed += item.used;
+            totalRemaining += item.remaining;
+        });
+
+        const usagePercent = ((totalUsed / totalLength) * 100).toFixed(2);
+
+        document.getElementById("stats").innerHTML = `
+        材料总数: ${totalMaterials} 根 |
+        总长度: ${totalLength} cm |
+        已用长度: ${totalUsed} cm |
+        剩余长度: ${totalRemaining} cm |
+        使用率: ${usagePercent}%
+    `;
+
+        // 绘制条形图
+        const containerWidth = container.clientWidth || 800;
+        const maxLength = Math.max(...data.map(d => d.totalLength));
+        const scale = containerWidth / maxLength;
+
+        data.forEach(item => {
+            const barWrapper = document.createElement("div");
+            barWrapper.className = "bar-wrapper";
+
+            const label = document.createElement("div");
+            label.className = "bar-label";
+            label.textContent = `材料 #${item.index} (总长: ${item.totalLength}cm, 已用: ${item.used}cm, 剩余: ${item.remaining}cm)`;
+            barWrapper.appendChild(label);
+
+            const bar = document.createElement("div");
+            bar.className = "bar";
+
+            item.cuts.forEach(cut => {
+                const cutDiv = document.createElement("div");
+                cutDiv.className = "cut";
+                cutDiv.style.backgroundColor = getRandomColor();
+                cutDiv.style.width = (cut * scale) + "px";
+                cutDiv.textContent = `${cut}cm`;
+                bar.appendChild(cutDiv);
+            });
+
+            if (item.remaining > 0) {
+                const remDiv = document.createElement("div");
+                remDiv.className = "cut remaining";
+                remDiv.style.width = (item.remaining * scale) + "px";
+                remDiv.textContent = `${item.remaining}cm`;
+                bar.appendChild(remDiv);
+            }
+
+            barWrapper.appendChild(bar);
+            container.appendChild(barWrapper);
+        });
+    }
+
+    function getRandomColor() {
+        return `hsl(${Math.random() * 360}, 70%, 50%)`;
+    }
+
+    // 横向拖动和滚轮缩放
+    const wrapper = document.getElementById("canvasWrapper");
+    wrapper.addEventListener("wheel", e => {
+        e.preventDefault();
+        scaleFactor += e.deltaY * -0.001;
+        scaleFactor = Math.min(Math.max(0.5, scaleFactor), 3);
+        document.getElementById("bars").style.transform = `scale(${scaleFactor})`;
+        document.getElementById("bars").style.transformOrigin = "0 0";
+    });
+    wrapper.addEventListener("mousedown", e => {
+        isDragging = true;
+        wrapper.style.cursor = "grabbing";
+        startX = e.pageX - wrapper.offsetLeft;
+        scrollLeft = wrapper.scrollLeft;
+    });
+    wrapper.addEventListener("mouseleave", () => { isDragging = false; wrapper.style.cursor = "grab"; });
+    wrapper.addEventListener("mouseup", () => { isDragging = false; wrapper.style.cursor = "grab"; });
+    wrapper.addEventListener("mousemove", e => {
+        if (!isDragging) return;
+        e.preventDefault();
+        const x = e.pageX - wrapper.offsetLeft;
+        const walk = (x - startX) * 1.5;
+        wrapper.scrollLeft = scrollLeft - walk;
+    });
+</script>
+
+</body>
+</html>
