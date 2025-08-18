@@ -1,5 +1,6 @@
 package com.yhy.cutting.controller;
 
+import com.yhy.cutting.service.CuttingBarService;
 import com.yhy.cutting.service.CuttingOptimizerService;
 import com.yhy.cutting.service.MaxRectsCuttingService;
 import com.yhy.cutting.vo.BarRequest;
@@ -18,11 +19,14 @@ import java.util.List;
 public class CutController {
 
     private final CuttingOptimizerService optimizerService;
+    private final CuttingBarService barService;
     private final MaxRectsCuttingService maxRectsCuttingService;
 
     public CutController(CuttingOptimizerService optimizerService,
+                         CuttingBarService barService,
                          MaxRectsCuttingService maxRectsCuttingService) {
         this.optimizerService = optimizerService;
+        this.barService = barService;
         this.maxRectsCuttingService = maxRectsCuttingService;
     }
 
@@ -34,7 +38,7 @@ public class CutController {
 
     @PostMapping(value = "bar")
     public List<BarResult> bar(@RequestBody BarRequest request){
-        return optimizerService.bar(request);
+        return barService.bar(request);
     }
 
 
