@@ -12,7 +12,10 @@ import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
+
 import java.math.BigDecimal;
+import java.math.MathContext;
+import java.math.RoundingMode;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -454,7 +457,7 @@ public class CuttingOptimizerService {
             if (!cuts.isEmpty()) {
                 double original = scrapLengthsBD.get(i).doubleValue();
                 double used = sum.doubleValue();
-                double remaining = original - used;
+                double remaining = new BigDecimal(original).subtract(new BigDecimal(used)).setScale(2, RoundingMode.HALF_UP).doubleValue();
                 results.add(BarResult.builder()
                         .index(i + 1)
                         .totalLength(original)
@@ -479,7 +482,7 @@ public class CuttingOptimizerService {
                     }
                 }
                 double used = sum.doubleValue();
-                double remaining = newMaterialLengthCM.doubleValue() - used;
+                double remaining = new BigDecimal(newMaterialLengthCM.doubleValue()).subtract(new BigDecimal(used)).setScale(2, RoundingMode.HALF_UP).doubleValue();
 
                 results.add(BarResult.builder()
                         .index(newBinIndex++)
