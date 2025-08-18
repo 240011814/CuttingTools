@@ -112,11 +112,11 @@ public class CuttingBarService {
 
         final int CAP = (int) Math.round(L * agg.SCALE + 1e-9);
 
-        // 1) 初始列
+        // 1) 初始列：多样化生成
         List<Column> columns = new ArrayList<>();
         Set<String> colSeen = new HashSet<>();
         seedColumns(agg, L, scraps, columns, colSeen);
-        LOGGER.info("Initial columns: {}", columns.size());
+        LOGGER.debug("Initial columns count: {}", columns.size());
 
         // 2) 主问题 LP（GLOP）
         MPSolver master = MPSolver.createSolver("GLOP");
@@ -148,7 +148,7 @@ public class CuttingBarService {
         for (int it = 0; it < MAX_ITER; it++) {
             MPSolver.ResultStatus st = master.solve();
             if (st != MPSolver.ResultStatus.OPTIMAL) {
-                LOGGER.error("Master not optimal at iter {}: {}", it, st);
+                LOGGER.warn("Master not optimal at iter {}: {}", it, st);
                 break;
             }
 
@@ -172,20 +172,10 @@ public class CuttingBarService {
                 remainingDemand[t] = Math.max(0, agg.demand[t] - (int) Math.floor(fulfilled + 1e-6));
             }
 
-            // 统计每种长度可用的旧料数量（用于新料定价抑制）
-            int[] scrapCount = new int[agg.types];
-            Arrays.fill(scrapCount, 0);
-            Map<Double, Integer> scrapLenMap = new HashMap<>();
-            for (double s : scraps) {
-                double rounded = Math.round(s * 2.0) / 2.0;
-                scrapLenMap.merge(rounded, 1, Integer::sum);
-            }
-            for (int t = 0; t < agg.types; t++) {
-                scrapCount[t] = scrapLenMap.getOrDefault(agg.lens[t], 0);
-            }
-
             List<Column> newCols = new ArrayList<>();
-            Column newCol = priceNew(agg, L, dualDem, remainingDemand, 0, CAP, scraps, scrapCount);
+
+            // 生成新料列（自动探索所有组合）
+            Column newCol = priceNew(agg, L, dualDem, remainingDemand, 0, CAP);
             if (newCol != null && reducedCostNew(newCol, dualDem) < -1e-9) {
                 String key = colKey(newCol);
                 if (!colSeen.contains(key)) {
@@ -194,6 +184,7 @@ public class CuttingBarService {
                 }
             }
 
+            // 生成旧料列
             for (int i = 0; i < scraps.length; i++) {
                 Column sc = priceScrap(agg, scraps[i], i, dualDem, remainingDemand);
                 if (sc != null && reducedCostScrap(sc, dualDem, dualScr[i]) < -1e-9) {
@@ -216,16 +207,16 @@ public class CuttingBarService {
             }
         }
 
-        // 4) 整数化（SCIP）
+        // 4) 整数化
         IntSolution sol;
         try {
             sol = integerize(columns, agg, scraps, L);
         } catch (Exception e) {
-            LOGGER.warn("SCIP failed: " + e.getMessage() + ", falling back to penalized relaxed.");
+            LOGGER.warn("SCIP failed: {}, falling back to relaxed.", e.getMessage());
             sol = solveWithPenalizedRelaxation(columns, agg, scraps, L);
         }
 
-        // 5) 展开为具体 BarResult
+        // 5) 展开结果
         return toBarResults(columns, sol, agg, map.typeToItemIdx, L, scraps);
     }
 
@@ -233,7 +224,7 @@ public class CuttingBarService {
         return c.type + "_" + c.scrapIdx + "_" + Arrays.toString(c.qty);
     }
 
-    // ===== 初始列 =====
+    // ===== 初始列：增强多样性 =====
     private void seedColumns(Agg agg, double L, double[] scraps, List<Column> out, Set<String> seen) {
         final int CAP = (int) Math.round(L * agg.SCALE + 1e-9);
 
@@ -246,59 +237,18 @@ public class CuttingBarService {
             qty[t] = take;
             double used = round2(take * agg.lens[t]);
             if (used > 0 && used <= L) {
-                Column col = new Column(Column.Type.NEW, -1, qty, used, L);
-                String key = colKey(col);
-                if (!seen.contains(key)) {
-                    seen.add(key);
-                    out.add(col);
-                }
+                addColumnIfNotExists(out, seen, new Column(Column.Type.NEW, -1, qty, used, L));
             }
         }
 
-        // 2. 贪心混合（升序）
-        int[] q1 = new int[agg.types];
-        double used1 = 0.0;
-        greedyPackInto(agg, L, agg.demand, q1, 1);
-        if (used1 > 0) {
-            Column col = new Column(Column.Type.NEW, -1, q1, used1, L);
-            String key = colKey(col);
-            if (!seen.contains(key)) {
-                seen.add(key);
-                out.add(col);
-            }
-        }
+        // 2. 贪心（降序）
+        addGreedyPattern(agg, L, agg.demand, out, seen, false);
 
-        // 3. 贪心混合（降序）
-        int[] q2 = new int[agg.types];
-        double used2 = 0.0;
-        greedyPackInto(agg, L, agg.demand, q2, -1);
-        if (used2 > 0) {
-            Column col = new Column(Column.Type.NEW, -1, q2, used2, L);
-            String key = colKey(col);
-            if (!seen.contains(key)) {
-                seen.add(key);
-                out.add(col);
-            }
-        }
+        // 3. 贪心（升序）
+        addGreedyPattern(agg, L, agg.demand, out, seen, true);
 
-        // 4. 强制加入 140*2 + 160*2 = 600 的完美模式
-        int t140 = findType(agg, 140.0);
-        int t160 = findType(agg, 160.0);
-        if (t140 != -1 && t160 != -1) {
-            int[] qty = new int[agg.types];
-            qty[t140] = 2;
-            qty[t160] = 2;
-            double used = 140 * 2 + 160 * 2;
-            if (Math.abs(used - L) < 1e-3) {
-                Column col = new Column(Column.Type.NEW, -1, qty, used, L);
-                String key = colKey(col);
-                if (!seen.contains(key)) {
-                    seen.add(key);
-                    out.add(col);
-                    LOGGER.info("Added perfect pattern: 140*2 + 160*2");
-                }
-            }
-        }
+        // 4. 交替选择：大、小、大、小...
+        addAlternatingPattern(agg, L, agg.demand, out, seen);
 
         // 5. SCRAP 贪心
         for (int i = 0; i < scraps.length; i++) {
@@ -307,68 +257,90 @@ public class CuttingBarService {
             int[] qs = greedyPack(agg, cap, agg.demand);
             double u = round2(dot(qs, agg.lens));
             if (u > 0 && u <= scraps[i]) {
-                Column col = new Column(Column.Type.SCRAP, i, qs, u, scraps[i]);
-                String key = colKey(col);
-                if (!seen.contains(key)) {
-                    seen.add(key);
-                    out.add(col);
-                }
+                addColumnIfNotExists(out, seen, new Column(Column.Type.SCRAP, i, qs, u, scraps[i]));
             }
         }
     }
 
-    // 贪心填充（order: 1=升序, -1=降序）
-    private void greedyPackInto(Agg agg, double L, int[] maxCount, int[] output, int order) {
+    // 贪心填充（升序或降序）
+    private void addGreedyPattern(Agg agg, double L, int[] maxCount, List<Column> out, Set<String> seen, boolean ascending) {
+        int[] qty = new int[agg.types];
         double used = 0.0;
-        Arrays.fill(output, 0);
-        Integer[] idx = IntStream.range(0, agg.types)
-                .boxed()
-                .toArray(Integer[]::new);
-        Arrays.sort(idx, (a, b) -> order * Double.compare(agg.lens[a], agg.lens[b]));
+        Integer[] indices = IntStream.range(0, agg.types).boxed().toArray(Integer[]::new);
+        Arrays.sort(indices, (a, b) -> ascending ? Double.compare(agg.lens[a], agg.lens[b]) : Double.compare(agg.lens[b], agg.lens[a]));
 
-        for (int id : idx) {
+        for (int id : indices) {
             int remaining = maxCount[id];
             if (remaining <= 0) continue;
             int can = (int) Math.floor((L - used) / agg.lens[id] + 1e-9);
             int take = Math.min(remaining, can);
             if (take > 0) {
-                output[id] += take;
+                qty[id] += take;
                 used = round2(used + take * agg.lens[id]);
             }
         }
-    }
-
-    private int findType(Agg agg, double len) {
-        for (int i = 0; i < agg.lens.length; i++) {
-            if (Math.abs(agg.lens[i] - len) < 1e-3) return i; // 放宽精度
+        if (used > 0 && used <= L) {
+            addColumnIfNotExists(out, seen, new Column(Column.Type.NEW, -1, qty, used, L));
         }
-        return -1;
     }
 
-    private int[] greedyPack(Agg agg, int cap, int[] maxCount) {
-        int[] take = new int[agg.types];
-        int load = 0;
-        Integer[] idx = IntStream.range(0, agg.types)
-                .boxed()
-                .toArray(Integer[]::new);
-        Arrays.sort(idx, (a, b) -> Double.compare(agg.lens[b], agg.lens[a]));
+    // 交替选择：尝试混合大小长度
+    private void addAlternatingPattern(Agg agg, double L, int[] maxCount, List<Column> out, Set<String> seen) {
+        int[] qty = new int[agg.types];
+        double used = 0.0;
+        Integer[] indices = IntStream.range(0, agg.types).boxed().toArray(Integer[]::new);
+        Arrays.sort(indices, (a, b) -> Double.compare(agg.lens[b], agg.lens[a])); // 降序
 
-        for (int id : idx) {
-            int w = agg.w[id];
-            if (w <= 0 || load >= cap) continue;
-            int can = Math.min(maxCount[id], (cap - load) / w);
-            if (can > 0) {
-                take[id] += can;
-                load += can * w;
+        List<Integer> candidates = new ArrayList<>(Arrays.asList(indices));
+        boolean pickLarge = true;
+
+        outer:
+        while (!candidates.isEmpty()) {
+            Integer selected = null;
+            List<Integer> tryOrder = pickLarge ? candidates : new ArrayList<>(candidates) {{ Collections.reverse(this); }};
+
+            for (Integer idx : tryOrder) {
+                if (qty[idx] < maxCount[idx] && used + agg.lens[idx] <= L + 1e-5) {
+                    selected = idx;
+                    break;
+                }
             }
+
+            if (selected == null) break;
+
+            qty[selected]++;
+            used = round2(used + agg.lens[selected]);
+            if (used > L + 1e-5) {
+                qty[selected]--;
+                used = round2(used - agg.lens[selected]);
+                break;
+            }
+
+            pickLarge = !pickLarge;
         }
-        return take;
+
+        if (used > 0 && !isAllZero(qty)) {
+            addColumnIfNotExists(out, seen, new Column(Column.Type.NEW, -1, qty, used, L));
+        }
+    }
+
+    private boolean isAllZero(int[] arr) {
+        for (int x : arr) if (x > 0) return false;
+        return true;
+    }
+
+    private void addColumnIfNotExists(List<Column> out, Set<String> seen, Column col) {
+        String key = colKey(col);
+        if (!seen.contains(key)) {
+            seen.add(key);
+            out.add(col);
+        }
     }
 
     // ===== 主问题添加列 =====
     private void addColumnToMaster(MPSolver master, MPObjective obj, MPConstraint[] dem, MPConstraint[] suse,
                                    List<MPVariable> x, Column c) {
-        MPVariable var = master.makeNumVar(0.0, Double.POSITIVE_INFINITY, "col_" + x.size() + "_" + UUID.randomUUID());
+        MPVariable var = master.makeNumVar(0.0, Double.POSITIVE_INFINITY, "col_" + x.size());
         x.add(var);
         if (c.type == Column.Type.NEW) {
             obj.setCoefficient(var, 1.0);
@@ -383,25 +355,17 @@ public class CuttingBarService {
         }
     }
 
-    // ===== 定价：NEW（带旧料优先抑制）=====
-    private Column priceNew(Agg agg, double L, double[] dualDem, int[] remainingDemand, int low, int high,
-                            double[] scraps, int[] scrapCount) {
+    // ===== 定价：NEW（完全背包 DP）=====
+    private Column priceNew(Agg agg, double L, double[] dualDem, int[] remainingDemand, int low, int high) {
         final int CAP = (int) Math.round(L * agg.SCALE + 1e-9);
         low = Math.max(0, low);
         high = Math.min(high, CAP);
         if (low > high) return null;
 
-        double[] adjustedDual = dualDem.clone();
-        for (int t = 0; t < agg.types; t++) {
-            if (scrapCount[t] > 0 && remainingDemand[t] > 0) {
-                adjustedDual[t] *= 0.3;
-            }
-        }
+        double[] dp = new double[CAP + 1]; // 最大收益
+        int[][] prev = new int[agg.types][CAP + 1]; // 回溯
 
-        double[] dp = new double[CAP + 1];
-        int[][] prev = new int[agg.types][CAP + 1];
-
-        for (int w = 0; w <= CAP; w++) dp[w] = 0;
+        Arrays.fill(dp, 0);
         for (int[] row : prev) Arrays.fill(row, 0);
 
         for (int t = 0; t < agg.types; t++) {
@@ -421,7 +385,7 @@ public class CuttingBarService {
                 double bestVal = ndp[w];
                 int can = Math.min(maxRep, w / wt);
                 for (int r = 1; r <= can; r++) {
-                    double cand = dp[w - r * wt] + r * adjustedDual[t];
+                    double cand = dp[w - r * wt] + r * dualDem[t];
                     if (cand > bestVal + 1e-12) {
                         bestVal = cand;
                         bestR = r;
@@ -458,7 +422,7 @@ public class CuttingBarService {
             qty[t] = prev[t][bestW];
         }
         double used = round2(bestW / (double) agg.SCALE);
-        if (sum(qty) == 0 || used > L + 1e-5) return null;
+        if (isAllZero(qty) || used > L + 1e-5) return null;
 
         return new Column(Column.Type.NEW, -1, qty, used, L);
     }
@@ -470,7 +434,7 @@ public class CuttingBarService {
 
         double[] dp = new double[CAP + 1];
         int[][] prev = new int[agg.types][CAP + 1];
-        for (int w = 0; w <= CAP; w++) dp[w] = 0;
+        Arrays.fill(dp, 0);
         for (int[] row : prev) Arrays.fill(row, 0);
 
         for (int t = 0; t < agg.types; t++) {
@@ -527,7 +491,7 @@ public class CuttingBarService {
             qty[t] = prev[t][bestW];
         }
         double used = round2(bestW / (double) agg.SCALE);
-        if (sum(qty) == 0 || used > scrapLen + 1e-5) return null;
+        if (isAllZero(qty) || used > scrapLen + 1e-5) return null;
 
         return new Column(Column.Type.SCRAP, scrapIdx, qty, used, scrapLen);
     }
@@ -592,21 +556,15 @@ public class CuttingBarService {
             }
             return new IntSolution(mult);
         }
-
         throw new IllegalStateException("SCIP failed: " + st);
     }
 
     private IntSolution solveWithPenalizedRelaxation(List<Column> cols, Agg agg, double[] scraps, double L) {
         MPSolver ip = MPSolver.createSolver("SCIP");
         if (ip == null) throw new IllegalStateException("SCIP not available");
-
         MPObjective obj = ip.objective();
         obj.setMinimization();
-
         MPVariable[] z = new MPVariable[cols.size()];
-        MPVariable[] excess = new MPVariable[agg.types];
-        double PENALTY = 100.0;
-
         for (int k = 0; k < cols.size(); k++) {
             Column c = cols.get(k);
             if (c.type == Column.Type.NEW) {
@@ -618,22 +576,12 @@ public class CuttingBarService {
         }
 
         for (int t = 0; t < agg.types; t++) {
-            excess[t] = ip.makeIntVar(0.0, 100, "excess_" + t);
-            obj.setCoefficient(excess[t], PENALTY);
-
             double lb = 0.95 * agg.demand[t];
             MPConstraint ct = ip.makeConstraint(lb, Double.POSITIVE_INFINITY, "dem_min_" + t);
             for (int k = 0; k < cols.size(); k++) {
                 int a = cols.get(k).qty[t];
                 if (a > 0) ct.setCoefficient(z[k], a);
             }
-
-            MPConstraint ub = ip.makeConstraint(-Double.POSITIVE_INFINITY, agg.demand[t], "dem_ub_" + t);
-            for (int k = 0; k < cols.size(); k++) {
-                int a = cols.get(k).qty[t];
-                if (a > 0) ub.setCoefficient(z[k], a);
-            }
-            ub.setCoefficient(excess[t], -1);
         }
 
         for (int i = 0; i < scraps.length; i++) {
@@ -653,8 +601,7 @@ public class CuttingBarService {
             }
             return new IntSolution(mult);
         }
-
-        throw new IllegalStateException("Penalized relaxation also failed: " + st);
+        throw new IllegalStateException("Relaxed solve failed: " + st);
     }
 
     // ===== 结果展开 =====
@@ -676,7 +623,7 @@ public class CuttingBarService {
                 for (int t = 0; t < agg.types; t++) {
                     for (int cnt = 0; cnt < c.qty[t]; cnt++) {
                         if (q[t].isEmpty()) {
-                            LOGGER.error("No more demand for length {}, but trying to produce", agg.lens[t]);
+                            LOGGER.error("Overproduction for length {}", agg.lens[t]);
                             continue;
                         }
                         q[t].pollFirst();
@@ -704,13 +651,6 @@ public class CuttingBarService {
                 }
             }
         }
-
-        for (int t = 0; t < agg.types; t++) {
-            if (!q[t].isEmpty()) {
-                LOGGER.warn("Unfulfilled demand for length {}: {} items left", agg.lens[t], q[t].size());
-            }
-        }
-
         return out;
     }
 
@@ -718,7 +658,7 @@ public class CuttingBarService {
     private AggMap aggregate(double[] items) {
         Map<Double, List<Integer>> map = new TreeMap<>();
         for (int i = 0; i < items.length; i++) {
-            double rounded = Math.round(items[i] * 2.0) / 2.0;
+            double rounded = Math.round(items[i] * 2.0) / 2.0; // 0.5cm 精度
             map.computeIfAbsent(rounded, k -> new ArrayList<>()).add(i);
         }
 
@@ -743,11 +683,36 @@ public class CuttingBarService {
         return round2(s);
     }
 
-    private int sum(int[] a) {
-        return Arrays.stream(a).sum();
-    }
-
     private double round2(double v) {
         return new BigDecimal(v).setScale(2, RoundingMode.HALF_UP).doubleValue();
+    }
+
+    /**
+     * 贪心装箱：给定容量 cap（scaled），在 demand 限制下尽可能多装
+     * 使用降序贪心策略
+     */
+    private int[] greedyPack(Agg agg, int cap, int[] maxCount) {
+        int[] take = new int[agg.types];
+        int load = 0; // 当前已占用刻度数
+
+        // 按长度降序排列
+        Integer[] indices = IntStream.range(0, agg.types)
+                .boxed()
+                .toArray(Integer[]::new);
+        Arrays.sort(indices, (a, b) -> Double.compare(agg.lens[b], agg.lens[a]));
+
+        for (int id : indices) {
+            int w = agg.w[id]; // 当前长度对应的刻度值
+            if (w <= 0 || load >= cap) continue;
+
+            // 最多还能切几根
+            int can = Math.min(maxCount[id], (cap - load) / w);
+            if (can > 0) {
+                take[id] += can;
+                load += can * w;
+            }
+        }
+
+        return take;
     }
 }
