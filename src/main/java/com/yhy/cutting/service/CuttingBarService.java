@@ -87,12 +87,8 @@ public class CuttingBarService {
         List<BigDecimal> scrapsBD = request.getMaterials();
 
         // Kerf（锯缝，单位：cm），允许为 null
-        double kerf = 0.0;
-        try {
-            BigDecimal k = (BigDecimal) BarRequest.class.getMethod("getKerf").invoke(request);
-            if (k != null) kerf = k.doubleValue();
-        } catch (Throwable ignore) { /* 若没有 getKerf() 则按 0 处理 */ }
-        final double kerfNonNeg = Math.max(0.0, kerf);
+        double kerf = request.getLoss().doubleValue();
+        double kerfNonNeg = Math.max(0.0, kerf);
 
         double[] items = itemsBD.stream().mapToDouble(BigDecimal::doubleValue).toArray();
         double[] scrapsAll = (scrapsBD == null || scrapsBD.isEmpty()) ? new double[0] :
