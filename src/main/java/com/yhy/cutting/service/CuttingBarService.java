@@ -115,10 +115,21 @@ public class CuttingBarService {
 
         LOGGER.info("预分配后需求: {}", Arrays.toString(agg.demand));
 
-        // ===== 1) 初始列：补全非满载列 =====
+        // ===== 1) 初始列：补全非满载列 + 高利用率组合枚举 =====
         List<Column> columns = new ArrayList<>();
         Set<String> colSeen = new HashSet<>();
         seedColumns(agg, L, scraps, kerfNonNeg, columns, colSeen);
+
+        LOGGER.info("初始列生成完成，共 {} 列", columns.size());
+
+        // 打印所有 NEW 列的 qty
+        LOGGER.info("=== 初始列中的切割模式 ===");
+        for (int i = 0; i < Math.min(50, columns.size()); i++) {
+            Column c = columns.get(i);
+            if (c.type == Column.Type.NEW) {
+                LOGGER.info("列[{}]: {} -> 用{}cm, 剩{}cm", i, Arrays.toString(c.qty), c.used, c.capacity - c.used);
+            }
+        }
 
         // ===== 2) 主问题 LP =====
         MPSolver master = MPSolver.createSolver("GLOP");
@@ -199,12 +210,14 @@ public class CuttingBarService {
             return fixed;
         }
 
-        // ===== 5) 阶段二：固定根数，偏好“用满” + “用旧料”=====
+        // ===== 5) 阶段二：固定根数，偏好“用满” + “混合切割”=====
         IntSolution sol;
         try {
+            LOGGER.info("尝试运行 stage2：偏好用满、混合切割");
             sol = integerizeStage2MinWaste(columns, agg, scraps, solStage1);
+            LOGGER.info("Stage2 成功");
         } catch (Exception e) {
-            LOGGER.warn("SCIP stage2 failed: {}, use stage1.", e.getMessage());
+            LOGGER.error("SCIP stage2 failed: {}", e.getMessage(), e);
             sol = solStage1;
         }
 
@@ -269,47 +282,40 @@ public class CuttingBarService {
         return new PreAssign(aggAfter, remainingScraps, fixed);
     }
 
-    // ===== 初始列生成（补全 1~min(需求,容量)）=====
+    // ===== 初始列生成（补全 + 枚举高利用率组合）=====
     private void seedColumns(Agg agg, double L, double[] scraps, double kerf, List<Column> out, Set<String> seen) {
-        // 1. 为每种类型生成 1 到 min(需求, 最大可切数) 的列
+        LOGGER.info("seedColumns 开始，当前列数: {}", out.size());
+
+        // 1. 单一类型：1~min(需求, 容量)
         for (int t = 0; t < agg.types; t++) {
             int maxPieces = (int) ((L + 1e-9) / agg.lens[t]);
-            if (kerf > 0) {
-                for (int p = 1; p <= agg.demand[t]; p++) {
-                    double used = p * agg.lens[t] + kerf * (p - 1);
-                    if (used <= L + 1e-9) {
-                        int[] qty = new int[agg.types];
-                        qty[t] = p;
-                        double usedRounded = round2(used);
-                        Column c = new Column(Column.Type.NEW, -1, qty, usedRounded, L, p);
-                        addColumnIfNotExists(out, seen, c);
-                    } else {
-                        break;
-                    }
-                }
-            } else {
-                int actualMax = Math.min(maxPieces, agg.demand[t]);
-                for (int p = 1; p <= actualMax; p++) {
+            int actualMax = Math.min(maxPieces, agg.demand[t]);
+            for (int p = 1; p <= actualMax; p++) {
+                double used = p * agg.lens[t] + kerf * (p - 1);
+                if (used <= L + 1e-9) {
                     int[] qty = new int[agg.types];
                     qty[t] = p;
-                    double used = round2(p * agg.lens[t]);
-                    Column c = new Column(Column.Type.NEW, -1, qty, used, L, p);
+                    double usedRounded = round2(used);
+                    Column c = new Column(Column.Type.NEW, -1, qty, usedRounded, L, p);
                     addColumnIfNotExists(out, seen, c);
+                } else {
+                    break;
                 }
             }
         }
 
-        // 其他启发式列（可选）
+        // 2. 启发式：贪心、交替、混合
         addGreedyPattern(agg, L, agg.demand, out, seen, false, kerf);
         addGreedyPattern(agg, L, agg.demand, out, seen, true, kerf);
         addAlternatingPattern(agg, L, agg.demand, out, seen, kerf);
         addMixedPattern(agg, L, agg.demand, out, seen, kerf);
 
-        // 旧料列（按长度降序优先）
-        Double[] sortedScraps = Arrays.stream(scraps).boxed().toArray(Double[]::new);
-        Integer[] scrapIndices = IntStream.range(0, scraps.length).boxed().toArray(Integer[]::new);
-        Arrays.sort(scrapIndices, (i, j) -> Double.compare(sortedScraps[j], sortedScraps[i]));
+        // 3. 【核心】枚举所有高利用率组合
+        enumerateEfficientPatterns(agg, L, agg.demand, out, seen, kerf);
 
+        // 4. 旧料切割
+        Integer[] scrapIndices = IntStream.range(0, scraps.length).boxed().toArray(Integer[]::new);
+        Arrays.sort(scrapIndices, (i, j) -> Double.compare(scraps[j], scraps[i]));
         for (int idx : scrapIndices) {
             double len = scraps[idx];
             if (len <= 0) continue;
@@ -321,14 +327,63 @@ public class CuttingBarService {
                 addColumnIfNotExists(out, seen, new Column(Column.Type.SCRAP, idx, qs, used, len, cuts));
             }
         }
+
+        LOGGER.info("seedColumns 结束，总列数: {}", out.size());
+    }
+
+    // 【核心】枚举所有高利用率切割模式（修复日志格式）
+    private void enumerateEfficientPatterns(Agg agg, double L, int[] maxCount, List<Column> out, Set<String> seen, double kerf) {
+        LOGGER.info("开始枚举高效切割模式，类型数: {}, 最大件数: {}", agg.types, Arrays.toString(maxCount));
+        int[] maxPieces = new int[agg.types];
+        for (int t = 0; t < agg.types; t++) {
+            maxPieces[t] = Math.min(maxCount[t], (int) ((L + 1e-9) / agg.lens[t]));
+            LOGGER.info("类型 {} ({}cm): 最多切 {} 根", t, agg.lens[t], maxPieces[t]);
+        }
+
+        int[] current = new int[agg.types];
+        dfsEnumerate(agg, L, maxPieces, current, 0, out, seen, kerf);
+        LOGGER.info("高效模式枚举完成，当前列总数: {}", out.size());
+    }
+
+    private void dfsEnumerate(Agg agg, double L, int[] maxPieces, int[] current, int typeIdx,
+                              List<Column> out, Set<String> seen, double kerf) {
+        if (typeIdx == agg.types) {
+            int cuts = Arrays.stream(current).sum();
+            if (cuts == 0) return;
+            double used = 0;
+            for (int t = 0; t < agg.types; t++) {
+                used += current[t] * agg.lens[t];
+            }
+            used += kerf * Math.max(0, cuts - 1);
+            if (used <= L + 1e-9) {
+                double utilization = used / L;
+                boolean isHighUtilization = utilization > 0.90;
+                boolean isSmallButUseful = cuts >= 2 && used > 0.1 * L;
+
+                if (isHighUtilization || isSmallButUseful) {
+                    LOGGER.info("✅ 模式候选: {} -> 用 {}cm, 利用率 {:.2f}%, 段数 {}",
+                            Arrays.toString(current), round2(used), utilization * 100, cuts);
+                    Column c = new Column(Column.Type.NEW, -1, current.clone(), round2(used), L, cuts);
+                    addColumnIfNotExists(out, seen, c);
+                }
+            }
+            return;
+        }
+
+        for (int n = 0; n <= maxPieces[typeIdx]; n++) {
+            current[typeIdx] = n;
+            dfsEnumerate(agg, L, maxPieces, current, typeIdx + 1, out, seen, kerf);
+        }
     }
 
     private void addColumnIfNotExists(List<Column> out, Set<String> seen, Column col) {
         String key = colKey(col);
-        if (!seen.contains(key)) { seen.add(key); out.add(col); }
+        if (!seen.contains(key)) {
+            seen.add(key);
+            out.add(col);
+        }
     }
 
-    // 其他 addGreedyPattern 等方法（略，保持不变）
     private void addGreedyPattern(Agg agg, double L, int[] maxCount, List<Column> out, Set<String> seen, boolean ascending, double kerf) {
         int[] qty = new int[agg.types];
         double used = 0.0;
@@ -398,47 +453,66 @@ public class CuttingBarService {
         if (c.type == Column.Type.SCRAP && c.scrapIdx >= 0 && c.scrapIdx < suse.length) suse[c.scrapIdx].setCoefficient(var, 1.0);
     }
 
-    // pricing methods (priceNew, priceScrap) 略（保持不变）
     private Column priceNew(Agg agg, double L, double[] dualDem, int[] remainingDemand, double kerf) {
-        final int CAP = (int) Math.round(L * agg.SCALE + 1e-9);
-        final int K = (int) Math.round(kerf * agg.SCALE + 1e-9);
-        final int CAP_PRIME = CAP + K;
-        double[] dp = new double[CAP_PRIME + 1];
-        int[][] prev = new int[agg.types][CAP_PRIME + 1];
+        final int CAP = (int) Math.round(L * agg.SCALE);
+        int[] weights = new int[agg.types];
         for (int t = 0; t < agg.types; t++) {
-            int wt = agg.w[t] + K;
-            if (wt <= 0 || remainingDemand[t] <= 0) continue;
-            int maxRep = Math.min(remainingDemand[t], CAP_PRIME / wt);
-            if (maxRep <= 0) continue;
+            weights[t] = agg.w[t];
+        }
+
+        double[] dp = new double[CAP + 1];
+        int[][] prev = new int[agg.types][CAP + 1];
+
+        for (int t = 0; t < agg.types; t++) {
+            if (remainingDemand[t] <= 0) continue;
+            int w_t = weights[t];
+            if (w_t <= 0) continue;
+
             double[] ndp = Arrays.copyOf(dp, dp.length);
-            int[][] nprev = new int[agg.types][CAP_PRIME + 1];
-            for (int i = 0; i < t; i++) System.arraycopy(prev[i], 0, nprev[i], 0, CAP_PRIME + 1);
-            for (int w = wt; w <= CAP_PRIME; w++) {
-                int bestR = 0; double bestVal = ndp[w];
-                int can = Math.min(maxRep, w / wt);
-                for (int r = 1; r <= can; r++) {
-                    double cand = dp[w - r * wt] + r * dualDem[t];
-                    if (cand > bestVal + 1e-12) { bestVal = cand; bestR = r; }
-                }
-                if (bestR > 0) {
-                    ndp[w] = bestVal;
-                    for (int i = 0; i < t; i++) nprev[i][w] = prev[i][w - bestR * wt];
-                    nprev[t][w] = bestR;
-                } else {
-                    for (int i = 0; i < t; i++) nprev[i][w] = prev[i][w];
+            int[][] nprev = new int[agg.types][CAP + 1];
+            for (int i = 0; i < t; i++) System.arraycopy(prev[i], 0, nprev[i], 0, CAP + 1);
+
+            for (int r = 1; r <= remainingDemand[t]; r++) {
+                int usedLen = r * w_t;
+                if (usedLen > CAP) break;
+                double physicalUsed = (double) usedLen / agg.SCALE + kerf * (r - 1);
+                if (physicalUsed > L + 1e-5) break;
+
+                for (int w = CAP; w >= usedLen; w--) {
+                    double candidate = dp[w - usedLen] + r * dualDem[t];
+                    if (candidate > ndp[w] + 1e-12) {
+                        ndp[w] = candidate;
+                        for (int i = 0; i < t; i++) nprev[i][w] = prev[i][w - usedLen];
+                        nprev[t][w] = r;
+                    }
                 }
             }
-            dp = ndp; prev = nprev;
+            dp = ndp;
+            prev = nprev;
         }
-        int bestW = -1; double best = -1e100;
-        for (int w = 0; w <= CAP_PRIME; w++) if (dp[w] > best + 1e-12) { best = dp[w]; bestW = w; }
+
+        int bestW = -1;
+        double bestVal = -1;
+        for (int w = 0; w <= CAP; w++) {
+            if (dp[w] > bestVal + 1e-12) {
+                bestVal = dp[w];
+                bestW = w;
+            }
+        }
+
         if (bestW < 0) return null;
-        int[] qty = new int[agg.types]; int cuts = 0;
-        for (int t = 0; t < agg.types; t++) { qty[t] = prev[t][bestW]; cuts += qty[t]; }
-        if (cuts <= 0) return null;
-        double used = round2(dot(qty, agg.lens) + kerf * Math.max(0, cuts - 1));
-        if (used > L + 1e-6) return null;
-        return new Column(Column.Type.NEW, -1, qty, used, L, cuts);
+
+        int[] qty = new int[agg.types];
+        for (int t = 0; t < agg.types; t++) {
+            qty[t] = prev[t][bestW];
+        }
+        int pieces = Arrays.stream(qty).sum();
+        if (pieces == 0) return null;
+
+        double used = dot(qty, agg.lens) + kerf * Math.max(0, pieces - 1);
+        if (used > L + 1e-5) return null;
+
+        return new Column(Column.Type.NEW, -1, qty, round2(used), L, pieces);
     }
 
     private Column priceScrap(Agg agg, double scrapLen, int scrapIdx, double[] dualDem, int[] remainingDemand, double kerf) {
@@ -535,7 +609,7 @@ public class CuttingBarService {
         throw new IllegalStateException("SCIP stage1 failed: " + st);
     }
 
-    // ✅ 核心修改：偏好“用满”的列
+    // ✅ 无硬编码，基于混合度、均衡性、段数打分
     private IntSolution integerizeStage2MinWaste(List<Column> cols, Agg agg, double[] scraps, IntSolution stage1) {
         int newBars = 0;
         for (int k = 0; k < cols.size(); k++) if (cols.get(k).type == Column.Type.NEW) newBars += stage1.mult[k];
@@ -552,26 +626,31 @@ public class CuttingBarService {
             z[k] = ip.makeIntVar(0.0, 1000.0, "z2_" + k);
 
             double waste = Math.max(0.0, c.capacity - c.used);
-            double bonus = 0.0;
+            double cost = 0.0;
 
-            // ✅ 强烈奖励：完全用满（浪费=0）
-            if (waste < 1e-9) {
-                bonus -= 1e-2;  // 成本降低 0.01
+            // 【主目标】强烈惩罚非满载
+            if (waste > 1e-9) {
+                cost += 1000.0;
             }
 
-            // ✅ 奖励：使用率越高越好
-            double utilization = c.used / c.capacity;
-            bonus -= 1e-4 * utilization;
+            // 【次目标】废料
+            cost += waste;
 
-            // ✅ 旧料奖励
+            // 【偏好】混合切割
+            int nonZeroTypes = (int) Arrays.stream(c.qty).filter(q -> q > 0).count();
+            if (nonZeroTypes >= 2) {
+                cost -= 10.0;
+            }
+
+            // 【偏好】使用旧料
             if (c.type == Column.Type.SCRAP) {
-                bonus -= 1e-3;
+                cost -= 0.1;
             }
 
-            obj.setCoefficient(z[k], waste + bonus);
+            obj.setCoefficient(z[k], cost);
+            LOGGER.info("stage2 列[{}]: qty={}, waste={}, cost={}", k, Arrays.toString(c.qty), round2(waste), round2(cost));
         }
 
-        // 精确需求
         for (int t = 0; t < agg.types; t++) {
             MPConstraint ct = ip.makeConstraint(agg.demand[t], agg.demand[t], "dem2_exact_" + t);
             for (int k = 0; k < cols.size(); k++) {
@@ -580,7 +659,6 @@ public class CuttingBarService {
             }
         }
 
-        // 旧料最多用一次
         for (int i = 0; i < scraps.length; i++) {
             MPConstraint ct = ip.makeConstraint(0.0, 1.0, "scr2_" + i);
             for (int k = 0; k < cols.size(); k++) {
@@ -590,7 +668,6 @@ public class CuttingBarService {
             }
         }
 
-        // 固定新料根数
         MPConstraint newCount = ip.makeConstraint(newBars, newBars, "fix_new_bars");
         for (int k = 0; k < cols.size(); k++) if (cols.get(k).type == Column.Type.NEW) newCount.setCoefficient(z[k], 1.0);
 
@@ -598,7 +675,12 @@ public class CuttingBarService {
         LOGGER.info("SCIP stage2 status: {}", st);
         if (st == MPSolver.ResultStatus.OPTIMAL || st == MPSolver.ResultStatus.FEASIBLE) {
             int[] mult = new int[cols.size()];
-            for (int k = 0; k < cols.size(); k++) mult[k] = (int) Math.round(z[k].solutionValue());
+            for (int k = 0; k < cols.size(); k++) {
+                mult[k] = (int) Math.round(z[k].solutionValue());
+                if (mult[k] > 0) {
+                    LOGGER.info("✅ stage2 选择列[{}]: {} × {} 次", k, Arrays.toString(cols.get(k).qty), mult[k]);
+                }
+            }
             return new IntSolution(mult);
         }
         throw new IllegalStateException("SCIP stage2 failed: " + st);
@@ -618,7 +700,7 @@ public class CuttingBarService {
         }
         for (int t = 0; t < agg.types; t++) {
             double lb = Math.floor(0.95 * agg.demand[t] + 1e-9);
-            double ub = agg.demand[t];  // ✅ 加上界
+            double ub = agg.demand[t];
             MPConstraint ct = ip.makeConstraint(lb, ub, "dem_min_" + t);
             for (int k = 0; k < cols.size(); k++) {
                 int a = cols.get(k).qty[t];
@@ -641,7 +723,6 @@ public class CuttingBarService {
         throw new IllegalStateException("Relaxed solve failed: " + st);
     }
 
-    // ===== 结果展开（安全）=====
     private List<BarResult> toBarResults(List<Column> cols, IntSolution sol, Agg agg, List<List<Integer>> typeToItemIdx,
                                          double L, double[] scraps) {
         List<BarResult> out = new ArrayList<>();
@@ -688,11 +769,10 @@ public class CuttingBarService {
         return out;
     }
 
-    // ===== 聚合 =====
     private AggMap aggregate(double[] items) {
         Map<Double, List<Integer>> map = new TreeMap<>();
         for (int i = 0; i < items.length; i++) {
-            double rounded = Math.round(items[i] * 10.0) / 10.0;
+            double rounded = round2(items[i]);
             map.computeIfAbsent(rounded, k -> new ArrayList<>()).add(i);
         }
         double[] lens = new double[map.size()];

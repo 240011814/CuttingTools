@@ -13,7 +13,7 @@ import java.util.List;
 
 
 @RestController()
-@RequestMapping(value = "cut")
+@RequestMapping(value = "api/cut")
 public class CutController {
 
     private final CuttingOptimizerService optimizerService;
