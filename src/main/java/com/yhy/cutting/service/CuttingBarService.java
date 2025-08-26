@@ -607,9 +607,6 @@ public class CuttingBarService {
 
     // ✅ 无硬编码，基于混合度、均衡性、段数打分
     private IntSolution integerizeStage2MinWaste(List<Column> cols, Agg agg, double[] scraps, IntSolution stage1) {
-        int newBars = 0;
-        for (int k = 0; k < cols.size(); k++) if (cols.get(k).type == Column.Type.NEW) newBars += stage1.mult[k];
-
         MPSolver ip = MPSolver.createSolver("SCIP");
         if (ip == null) throw new IllegalStateException("SCIP not available");
         ip.setTimeLimit(60_000);
@@ -624,29 +621,25 @@ public class CuttingBarService {
             double waste = Math.max(0.0, c.capacity - c.used);
             double cost = 0.0;
 
-            // 【主目标】强烈惩罚非满载
+            // 主目标：非满载根数越少越好
             if (waste > 1e-9) {
                 cost += 1000.0;
             }
 
-            // 【次目标】废料
+            // 次目标：废料
             cost += waste;
 
-            // 【偏好】混合切割
+            // 偏好混合（单类型也ok）
             int nonZeroTypes = (int) Arrays.stream(c.qty).filter(q -> q > 0).count();
             if (nonZeroTypes >= 2) {
                 cost -= 10.0;
-            }
-
-            // 【偏好】使用旧料
-            if (c.type == Column.Type.SCRAP) {
-                cost -= 0.1;
             }
 
             obj.setCoefficient(z[k], cost);
             LOGGER.info("stage2 列[{}]: qty={}, waste={}, cost={}", k, Arrays.toString(c.qty), round2(waste), round2(cost));
         }
 
+        // 需求约束
         for (int t = 0; t < agg.types; t++) {
             MPConstraint ct = ip.makeConstraint(agg.demand[t], agg.demand[t], "dem2_exact_" + t);
             for (int k = 0; k < cols.size(); k++) {
@@ -655,6 +648,7 @@ public class CuttingBarService {
             }
         }
 
+        // 旧料使用约束
         for (int i = 0; i < scraps.length; i++) {
             MPConstraint ct = ip.makeConstraint(0.0, 1.0, "scr2_" + i);
             for (int k = 0; k < cols.size(); k++) {
@@ -664,8 +658,8 @@ public class CuttingBarService {
             }
         }
 
-        MPConstraint newCount = ip.makeConstraint(newBars, newBars, "fix_new_bars");
-        for (int k = 0; k < cols.size(); k++) if (cols.get(k).type == Column.Type.NEW) newCount.setCoefficient(z[k], 1.0);
+        // ✅ 不再固定 newBars，让 stage2 自由选择最少根数
+        // 这样 [6]+[4] 和 [5]+[5] 都可能被探索
 
         MPSolver.ResultStatus st = ip.solve();
         LOGGER.info("SCIP stage2 status: {}", st);
