@@ -18,4 +18,5 @@ public class BarResult {
     public List<Double> cuts = new ArrayList<Double>();
     public double used;
     public double remaining;
+    public String source;
 }
