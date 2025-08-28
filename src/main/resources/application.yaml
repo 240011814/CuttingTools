@@ -1,0 +1,17 @@
+spring:
+  application:
+    name: cutting
+  liquibase:
+    change-log: classpath:db/changelog.xml
+  datasource:
+    username: ${MYSQL_USER:root}
+    password: ${MYSQL_PWD:Wiseman9527}
+    url: ${MYSQL_URL:jdbc:mysql://10.1.6.156:3306/opt_omc?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai}
+  jpa:
+    show-sql: false
+    properties:
+      hibernate:
+        format_sql: true
+logging:
+  level:
+    org.hibernate.orm.jdbc. bind : TRACE

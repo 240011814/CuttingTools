@@ -1,4 +1,4 @@
-package com.yhy.cutting.vo;
+package com.yhy.cutting.cut.vo;
 
 public class Item {
     private String label;

@@ -1,10 +1,9 @@
-package com.yhy.cutting.service;
+package com.yhy.cutting.cut.service;
 
 import com.google.ortools.Loader;
 import com.google.ortools.linearsolver.*;
-import com.google.ortools.sat.SatParameters;
-import com.yhy.cutting.vo.BarRequest;
-import com.yhy.cutting.vo.BarResult;
+import com.yhy.cutting.cut.vo.BarRequest;
+import com.yhy.cutting.cut.vo.BarResult;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;

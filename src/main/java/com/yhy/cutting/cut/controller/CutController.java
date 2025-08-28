@@ -1,9 +1,9 @@
-package com.yhy.cutting.controller;
+package com.yhy.cutting.cut.controller;
 
-import com.yhy.cutting.service.CuttingBarService;
-import com.yhy.cutting.service.CuttingOptimizerService;
-import com.yhy.cutting.service.MaxRectsCuttingService;
-import com.yhy.cutting.vo.*;
+import com.yhy.cutting.cut.service.CuttingBarService;
+import com.yhy.cutting.cut.service.CuttingOptimizerService;
+import com.yhy.cutting.cut.service.MaxRectsCuttingService;
+import com.yhy.cutting.cut.vo.*;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;

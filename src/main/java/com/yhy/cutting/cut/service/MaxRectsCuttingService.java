@@ -1,9 +1,9 @@
-package com.yhy.cutting.service;
+package com.yhy.cutting.cut.service;
 
-import com.yhy.cutting.vo.BinResult;
-import com.yhy.cutting.vo.Item;
-import com.yhy.cutting.vo.MaterialType;
-import com.yhy.cutting.vo.Piece;
+import com.yhy.cutting.cut.vo.BinResult;
+import com.yhy.cutting.cut.vo.Item;
+import com.yhy.cutting.cut.vo.MaterialType;
+import com.yhy.cutting.cut.vo.Piece;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;

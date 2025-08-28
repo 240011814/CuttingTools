@@ -1,4 +1,4 @@
-package com.yhy.cutting.vo;
+package com.yhy.cutting.cut.vo;
 
 import lombok.AllArgsConstructor;
 import lombok.Data;

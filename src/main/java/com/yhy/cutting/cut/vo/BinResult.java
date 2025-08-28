@@ -1,5 +1,5 @@
 // 在 BinResult.java 中添加字段
-package com.yhy.cutting.vo;
+package com.yhy.cutting.cut.vo;
 
 import java.util.List;
 
