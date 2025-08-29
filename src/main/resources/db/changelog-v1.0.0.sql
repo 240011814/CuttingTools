@@ -28,5 +28,5 @@ CREATE TABLE IF NOT EXISTS user (
 
 --changeset hou yong:1002  runOnChange:true
 --comment: add  user
-INSERT INTO opt_omc.`user` (id,user_name,password,email,phone,address,refresh_token,create_time,update_time,enabled) VALUES
+INSERT INTO `user` (id,user_name,password,email,phone,address,refresh_token,create_time,update_time,enabled) VALUES
     ('1960951924276264960','admin','$2a$10$LfZvc1jgyBfL.4LMyfI8QeWkSU.LdBVSTtfPlQ/lL1nrAaFILCNim',NULL,NULL,NULL,NULL,'2025-08-28 14:25:46','2025-08-28 14:25:46',1);
