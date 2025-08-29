@@ -15,4 +15,5 @@ public class BarRequest {
     private List<BigDecimal> materials;
     BigDecimal newMaterialLength;
     BigDecimal loss;
+    BigDecimal utilizationWeight;
 }

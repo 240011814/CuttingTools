@@ -219,7 +219,8 @@ public class CuttingBarService {
         IntSolution sol;
         try {
             LOGGER.info("尝试运行 stage2：偏好用满、混合切割");
-            sol = integerizeStage2MinWaste(columns, agg, scraps, solStage1);
+            BigDecimal weight =  Optional.ofNullable(request.getUtilizationWeight()).orElse(new BigDecimal(5)).negate();
+            sol = integerizeStage2MinWaste(columns, agg, scraps, solStage1,weight);
             LOGGER.info("Stage2 成功");
         } catch (Exception e) {
             LOGGER.error("SCIP stage2 failed: {}", e.getMessage(), e);
@@ -653,7 +654,7 @@ public class CuttingBarService {
 
 
     // ✅ 无硬编码，基于混合度、均衡性、段数打分
-    private IntSolution integerizeStage2MinWaste(List<Column> cols, Agg agg, double[] scraps, IntSolution stage1) {
+    private IntSolution integerizeStage2MinWaste(List<Column> cols, Agg agg, double[] scraps, IntSolution stage1, BigDecimal weight) {
         int newBars = 0;
         for (int k = 0; k < cols.size(); k++) {
             if (cols.get(k).type == Column.Type.NEW) {
@@ -683,7 +684,7 @@ public class CuttingBarService {
 
 
             double utilization = c.used / c.capacity;
-            cost += 1000 * (1 - Math.exp(0.14 * utilization));
+            cost += 1000 * Math.exp(weight.multiply(new BigDecimal(utilization)).doubleValue());
 
             // 【偏好】混合切割
             int nonZeroTypes = (int) Arrays.stream(c.qty).filter(q -> q > 0).count();
