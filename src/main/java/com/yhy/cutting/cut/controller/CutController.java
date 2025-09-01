@@ -30,7 +30,7 @@ public class CutController {
 
     @PostMapping(value = "plane")
     public R<List<BinResult>> optimizeWithMaterials(@RequestBody BinRequest request) {
-        return R.ok(maxRectsCuttingService.optimize(request.getItems(), request.getMaterials()));
+        return R.ok(maxRectsCuttingService.optimize(request));
     }
 
 

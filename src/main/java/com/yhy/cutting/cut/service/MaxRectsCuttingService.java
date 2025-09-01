@@ -1,9 +1,6 @@
 package com.yhy.cutting.cut.service;
 
-import com.yhy.cutting.cut.vo.BinResult;
-import com.yhy.cutting.cut.vo.Item;
-import com.yhy.cutting.cut.vo.MaterialType;
-import com.yhy.cutting.cut.vo.Piece;
+import com.yhy.cutting.cut.vo.*;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -15,7 +12,9 @@ public class MaxRectsCuttingService {
 
     private static final int SCALE = 2;
 
-    public List<BinResult> optimize(List<Item> items, List<MaterialType> availableMaterials) {
+    public List<BinResult> optimize(BinRequest request) {
+        List<Item> items = request.getItems();
+        List<MaterialType> availableMaterials = request.getMaterials();
         if (items == null || items.isEmpty()) {
             return Collections.emptyList();
         }
@@ -31,7 +30,7 @@ public class MaxRectsCuttingService {
 
         // 添加备用材料
         for (int i = 0; i < 100; i++) {
-            materials.add(new MaterialInstance("新2x2板材", 2.0, 2.0, 0));
+            materials.add(new MaterialInstance("新2x2板材", request.getWidth().longValue(), request.getHeight().longValue(), 0));
         }
 
         // 按优先级+面积排序

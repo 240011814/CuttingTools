@@ -4,6 +4,7 @@ import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.math.BigDecimal;
 import java.util.List;
 
 @Data
@@ -12,5 +13,7 @@ import java.util.List;
 public class BinRequest {
     private List<Item> items;
     private List<MaterialType> materials;
+    private BigDecimal height;
+    private BigDecimal width;
 }
 
