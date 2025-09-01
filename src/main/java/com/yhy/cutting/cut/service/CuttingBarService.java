@@ -219,7 +219,7 @@ public class CuttingBarService {
         IntSolution sol;
         try {
             LOGGER.info("尝试运行 stage2：偏好用满、混合切割");
-            BigDecimal weight =  Optional.ofNullable(request.getUtilizationWeight()).orElse(new BigDecimal(5)).negate();
+            BigDecimal weight =  Optional.ofNullable(request.getUtilizationWeight()).orElse(new BigDecimal(5));
             sol = integerizeStage2MinWaste(columns, agg, scraps, solStage1,weight);
             LOGGER.info("Stage2 成功");
         } catch (Exception e) {
@@ -684,8 +684,10 @@ public class CuttingBarService {
 
 
             double utilization = c.used / c.capacity;
-            cost += 1000 * Math.exp(weight.multiply(new BigDecimal(utilization)).doubleValue());
+            cost += 1000 * (1 - Math.pow(utilization, weight.abs().doubleValue()));
 
+            //cost += 1000 * Math.exp(weight.multiply(new BigDecimal(utilization)).doubleValue());
+            //LOGGER.info("stage2 列[{}]: qty={}, utilization cost={}", k, Arrays.toString(c.qty), round2((long) cost));
             // 【偏好】混合切割
             int nonZeroTypes = (int) Arrays.stream(c.qty).filter(q -> q > 0).count();
             if (nonZeroTypes >= 2) {
