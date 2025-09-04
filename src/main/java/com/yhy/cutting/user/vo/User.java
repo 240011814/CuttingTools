@@ -9,6 +9,7 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 import java.util.Date;
+import java.util.Optional;
 
 @Entity
 @Data
@@ -48,8 +49,14 @@ public class User {
     @Column()
     private boolean enabled = true;
 
+    @Column()
+    private boolean superAdmin ;
+
+    @Column()
+    private String nickName;
+
     public User(UserRequest userRequest) {
-        this.userName = userRequest.getUserName();
+        this.userName = userRequest.getPhone();
         this.email = userRequest.getEmail();
         this.phone = userRequest.getPhone();
         this.address = userRequest.getAddress();

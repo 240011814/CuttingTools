@@ -66,13 +66,16 @@ public class AuthController {
 
     // 可选：注册接口
     @PostMapping("/register")
-    public R<User> register(@RequestBody UserRequest request) {
+    public R<UserInfo> register(@RequestBody UserRequest request) {
+        if(!request.getPassword().equals(request.getConfirmPassword())) {
+            return R.failed("密码不一致");
+        }
         User user = new User(request);
         user.setId(IdUtil.getSnowflakeNextIdStr());
         user.setPassword(new BCryptPasswordEncoder().encode(request.getPassword()));
         userRepository.save(user);
         user.setPassword("");
-        return R.ok(user);
+        return R.ok(new UserInfo(user));
     }
 
     @PostMapping("/refresh-token")

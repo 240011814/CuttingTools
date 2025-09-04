@@ -30,3 +30,18 @@ CREATE TABLE IF NOT EXISTS user (
 --comment: add  user
 INSERT INTO `user` (id,user_name,password,email,phone,address,refresh_token,create_time,update_time,enabled) VALUES
     ('1960951924276264960','admin','$2a$10$LfZvc1jgyBfL.4LMyfI8QeWkSU.LdBVSTtfPlQ/lL1nrAaFILCNim',NULL,NULL,NULL,NULL,'2025-08-28 14:25:46','2025-08-28 14:25:46',1);
+
+
+--changeset hou yong:1003
+--comment: add  user
+ALTER TABLE `user` ADD super_admin TINYINT(1) DEFAULT 0;
+
+
+--changeset hou yong:1004
+--comment: add  user
+ALTER TABLE `user` ADD nick_name varchar(100) NULL;
+
+
+--changeset hou yong:1005
+--comment: add  user
+update `user` set super_admin = 1 where id = '1960951924276264960'

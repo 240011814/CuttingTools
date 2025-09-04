@@ -30,7 +30,7 @@ public class MaxRectsCuttingService {
 
         // 添加备用材料
         for (int i = 0; i < 100; i++) {
-            materials.add(new MaterialInstance("新2x2板材", request.getWidth().longValue(), request.getHeight().longValue(), 0));
+            materials.add(new MaterialInstance("新板材", request.getWidth().longValue(), request.getHeight().longValue(), 0));
         }
 
         // 按优先级+面积排序
