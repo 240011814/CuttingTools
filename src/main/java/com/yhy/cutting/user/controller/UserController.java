@@ -4,7 +4,6 @@ import com.yhy.cutting.cut.vo.R;
 import com.yhy.cutting.user.repository.UserRepository;
 import com.yhy.cutting.user.vo.User;
 import com.yhy.cutting.user.vo.UserInfo;
-import com.yhy.cutting.user.vo.UserRequest;
 import jakarta.persistence.criteria.Predicate;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;

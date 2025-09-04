@@ -36,7 +36,7 @@ public class UserInfo implements Serializable {
 
     public UserInfo(User user) {
         this.id = user.getId();
-        this.userName = user.getUserName();
+        this.userName = user.getUsername();
         this.enabled = user.isEnabled();
         this.email = Optional.ofNullable(user.getEmail()).orElse("");
         this.phone = Optional.ofNullable(user.getPhone()).orElse("");

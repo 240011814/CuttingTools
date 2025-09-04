@@ -23,12 +23,8 @@ public class UserService implements UserDetailsService {
         Optional<User> byUsername = userRepository.findByUserName(username);
         if (!byUsername.isPresent()) {
             return null;
+        }else {
+            return byUsername.get();
         }
-        User user = byUsername.get();
-        if(!user.isEnabled()) {
-            return null;
-        }
-        return new org.springframework.security.core.userdetails.User(user.getUserName(), user.getPassword(), new ArrayList<>());
-
     }
 }

@@ -85,8 +85,8 @@ public class AuthController {
         Optional<User> temp = refreshTokenService.getUsernameByRefreshToken(refreshToken);
         if (temp.isPresent()) {
             User user = temp.get();
-            String newAccessToken = jwtUtil.generateToken(user.getUserName());
-            String newRefreshToken = refreshTokenService.createRefreshToken(user.getUserName());
+            String newAccessToken = jwtUtil.generateToken(user.getUsername());
+            String newRefreshToken = refreshTokenService.createRefreshToken(user.getUsername());
             return R.ok(new AuthResponse(newAccessToken, newRefreshToken));
         } else {
             return R.failed("无效或过期的刷新Token");

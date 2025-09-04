@@ -1,8 +1,10 @@
 package com.yhy.cutting.user.config;
 
+import com.yhy.cutting.user.vo.User;
 import io.jsonwebtoken.JwtParser;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.SignatureAlgorithm;
+import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.stereotype.Component;
 import java.util.Date;
 
@@ -32,8 +34,8 @@ public class JwtUtil {
     }
 
     // 验证 Token
-    public Boolean validateToken(String token, String username) {
-        return username.equals(extractUsername(token)) && !isTokenExpired(token);
+    public Boolean validateToken(String token, UserDetails user) {
+        return user.getUsername().equals(extractUsername(token)) && !isTokenExpired(token) && user.isEnabled();
     }
 
     private Boolean isTokenExpired(String token) {
