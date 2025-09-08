@@ -1,21 +1,21 @@
 package com.yhy.cutting.cut.vo;
 
 public class MaterialType {
-    private String name;
+    private String label;
     private double width;
     private double height;
-    private int availableCount;
+    private int quantity;
 
-    public MaterialType(String name, double width, double height, int availableCount) {
-        this.name = name;
+    public MaterialType(String label, double width, double height, int quantity) {
+        this.label = label;
         this.width = width;
         this.height = height;
-        this.availableCount = availableCount;
+        this.quantity = quantity;
     }
 
     // getters and setters
-    public String getName() { return name; }
+    public String getLabel() { return label; }
     public double getWidth() { return width; }
     public double getHeight() { return height; }
-    public int getAvailableCount() { return availableCount; }
+    public int getQuantity() { return quantity; }
 }

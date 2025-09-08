@@ -234,9 +234,9 @@ public class CuttingOptimizerService {
         List<MaterialInstance> instances = new ArrayList<>();
         if (availableMaterials != null) {
             for (MaterialType material : availableMaterials) {
-                int cnt = Math.max(0, material.getAvailableCount());
+                int cnt = Math.max(0, material.getQuantity());
                 for (int i = 0; i < cnt; i++) {
-                    instances.add(new MaterialInstance(material.getName(), material.getWidth(), material.getHeight()));
+                    instances.add(new MaterialInstance(material.getLabel(), material.getWidth(), material.getHeight()));
                 }
             }
         }

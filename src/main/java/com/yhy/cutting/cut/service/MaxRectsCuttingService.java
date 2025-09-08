@@ -22,9 +22,9 @@ public class MaxRectsCuttingService {
         // 构建可用材料实例列表
         List<MaterialInstance> materials = new ArrayList<>();
         for (MaterialType m : availableMaterials) {
-            int count = Math.max(0, m.getAvailableCount());
+            int count = Math.max(0, m.getQuantity());
             for (int i = 0; i < count; i++) {
-                materials.add(new MaterialInstance(m.getName(), m.getWidth(), m.getHeight(), 10));
+                materials.add(new MaterialInstance(m.getLabel(), m.getWidth(), m.getHeight(), 10));
             }
         }
 
