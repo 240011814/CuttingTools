@@ -19,18 +19,19 @@ import java.util.*;
 import java.util.stream.Collectors;
 
 @Service
-public class CuttingOptimizerService {
+public class CuttingOptimizerService implements IPlaneService{
 
     private static final Logger LOGGER = LoggerFactory.getLogger(CuttingOptimizerService.class);
     private static final int SCALE = 1000;
 
-    public List<BinResult> plane(List<Item> items, List<MaterialType> availableMaterials) {
+    public List<BinResult> optimize(BinRequest request) {
+        List<Item> items = request.getItems();
         if (items == null || items.isEmpty()) {
             return Collections.emptyList();
         }
-
-        List<MaterialType> sortedMaterials = availableMaterials != null
-                ? availableMaterials.stream()
+        List<MaterialType> materials = request.getMaterials();
+        List<MaterialType> sortedMaterials = materials != null
+                ? materials.stream()
                 .sorted(Comparator.comparingDouble(m -> m.getWidth() * m.getHeight()))
                 .collect(Collectors.toList())
                 : new ArrayList<>();
@@ -159,6 +160,11 @@ public class CuttingOptimizerService {
             e.printStackTrace();
             return Collections.emptyList();
         }
+    }
+
+    @Override
+    public String getName() {
+        return "or_tools";
     }
 
     private List<BinResult> buildResultsFromSolver(CpSolver solver, List<Item> items, List<MaterialInstance> materialInstances, int numBins, BoolVar[][] inBin, BoolVar[][] placeNR, BoolVar[][] placeR, IntVar[][] xNR, IntVar[][] yNR, IntVar[][] xR, IntVar[][] yR) {

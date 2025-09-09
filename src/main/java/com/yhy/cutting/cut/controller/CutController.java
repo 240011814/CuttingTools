@@ -1,8 +1,6 @@
 package com.yhy.cutting.cut.controller;
 
-import com.yhy.cutting.cut.service.CuttingBarService;
-import com.yhy.cutting.cut.service.CuttingOptimizerService;
-import com.yhy.cutting.cut.service.MaxRectsCuttingService;
+import com.yhy.cutting.cut.service.*;
 import com.yhy.cutting.cut.vo.*;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -16,21 +14,22 @@ import java.util.List;
 @RequestMapping(value = "api/cut")
 public class CutController {
 
-    private final CuttingOptimizerService optimizerService;
     private final CuttingBarService barService;
+    private final List<IPlaneService> planeServices;
     private final MaxRectsCuttingService maxRectsCuttingService;
 
-    public CutController(CuttingOptimizerService optimizerService,
-                         CuttingBarService barService,
-                         MaxRectsCuttingService maxRectsCuttingService) {
-        this.optimizerService = optimizerService;
+    public CutController(CuttingBarService barService,
+                         List<IPlaneService> planeServices,
+                         MaxRectsCuttingService maxRectsCuttingService
+    ) {
         this.barService = barService;
+        this.planeServices = planeServices;
         this.maxRectsCuttingService = maxRectsCuttingService;
     }
 
     @PostMapping(value = "plane")
     public R<List<BinResult>> optimizeWithMaterials(@RequestBody BinRequest request) {
-        return R.ok(maxRectsCuttingService.optimize(request));
+        return R.ok(planeServices.stream().filter(x -> x.getName().equals(request.getStrategy())).findFirst().orElse(maxRectsCuttingService).optimize(request));
     }
 
 

@@ -15,5 +15,6 @@ public class BinRequest {
     private List<MaterialType> materials;
     private BigDecimal height;
     private BigDecimal width;
+    private String strategy;
 }
 
