@@ -103,62 +103,69 @@ public class GuillotineCuttingService implements IPlaneService {
             double h = item.getHeight();
 
             Placement bestPlacement = null;
-            double bestWaste = Double.MAX_VALUE;
+            FreeRectangle bestRect = null;
+            int bestRectIndex = -1;
+            final double EPS = 1e-6;
 
-            // 尝试每个自由矩形
+            // 全局最优比较（primary waste, secondary minLeftover, tertiary maxLeftover, then prefer rotated）
             for (int i = 0; i < freeRects.size(); i++) {
                 FreeRectangle rect = freeRects.get(i);
 
-                // 尝试不旋转
-                if (w <= rect.width && h <= rect.height) {
-                    Placement placement = new Placement(rect.x, rect.y, w, h, false, i);
-                    double waste = calculateWaste(rect, w, h);
-                    if (waste < bestWaste) {
-                        bestWaste = waste;
-                        bestPlacement = placement;
-                    }
+                List<Placement> candidates = new ArrayList<>();
+                // 不旋转
+                if (w <= rect.width + EPS && h <= rect.height + EPS) {
+                    candidates.add(new Placement(rect.x, rect.y, w, h, false, i));
+                }
+                // 旋转
+                if (h <= rect.width + EPS && w <= rect.height + EPS) {
+                    candidates.add(new Placement(rect.x, rect.y, h, w, true, i));
                 }
 
-                // 尝试旋转
-                if (h <= rect.width && w <= rect.height) {
-                    Placement placement = new Placement(rect.x, rect.y, h, w, true, i);
-                    double waste = calculateWaste(rect, h, w);
-                    if (waste < bestWaste) {
-                        bestWaste = waste;
-                        bestPlacement = placement;
+                for (Placement cand : candidates) {
+                    if (bestPlacement == null) {
+                        bestPlacement = cand;
+                        bestRect = rect;
+                        bestRectIndex = i;
+                    } else {
+                        double[] candScore = placementScore(rect, cand);
+                        double[] bestScore = placementScore(bestRect, bestPlacement);
+                        int cmp = compareScore(candScore, bestScore, EPS);
+                        if (cmp < 0) { // cand 更优
+                            bestPlacement = cand;
+                            bestRect = rect;
+                            bestRectIndex = i;
+                        }
                     }
                 }
             }
 
             if (bestPlacement != null) {
-                // 执行切割
+                // 使用选中的 freeRect（注意：rectIndex 在 candidate 中已设置为当时的 i）
                 FreeRectangle target = freeRects.get(bestPlacement.rectIndex);
                 freeRects.remove(bestPlacement.rectIndex);
 
-                double placedW = bestPlacement.rotated ? item.getHeight() : item.getWidth();
-                double placedH = bestPlacement.rotated ? item.getWidth() : item.getHeight();
+                double placedW = bestPlacement.w;
+                double placedH = bestPlacement.h;
 
                 // Guillotine 切割：横切或竖切，选择剩余区域更“方正”的方案
                 FreeRectangle cut1 = null, cut2 = null;
 
                 // 方案1：竖切（按宽度切）
-                if (target.width > placedW) {
+                if (target.width > placedW + 1e-9) {
                     cut1 = new FreeRectangle(target.x + placedW, target.y, target.width - placedW, placedH);
                     cut2 = new FreeRectangle(target.x, target.y + placedH, target.width, target.height - placedH);
                 }
 
                 // 方案2：横切（按高度切）
-                if (target.height > placedH) {
+                if (target.height > placedH + 1e-9) {
                     FreeRectangle alt1 = new FreeRectangle(target.x, target.y + placedH, placedW, target.height - placedH);
                     FreeRectangle alt2 = new FreeRectangle(target.x + placedW, target.y, target.width - placedW, target.height);
-                    // 选择更“方正”的切割方案（长宽比更接近1）
                     if (cut1 == null || isMoreSquare(alt1, alt2, cut1, cut2)) {
                         cut1 = alt1;
                         cut2 = alt2;
                     }
                 }
 
-                // 添加新自由矩形（非空）
                 if (cut1 != null && cut1.area() > 0) freeRects.add(cut1);
                 if (cut2 != null && cut2.area() > 0) freeRects.add(cut2);
 
@@ -166,6 +173,29 @@ public class GuillotineCuttingService implements IPlaneService {
             }
 
             return null;
+        }
+
+        private double[] placementScore(FreeRectangle rect, Placement p) {
+            // [0]=waste, [1]=minLeftover, [2]=maxLeftover, [3]=rotPref (越小越优，旋转优先)
+            double waste = calculateWaste(rect, p.w, p.h);
+            double leftoverW = rect.width - p.w;
+            double leftoverH = rect.height - p.h;
+            double minLeft = Math.min(leftoverW, leftoverH);
+            double maxLeft = Math.max(leftoverW, leftoverH);
+            double rotPref = p.rotated ? 0.0 : 1.0;
+            return new double[]{waste, minLeft, maxLeft, rotPref};
+        }
+
+        private int compareScore(double[] a, double[] b, double EPS) {
+            // 按先后优先级比较：waste, minLeft, maxLeft, rotPref（越小越好）
+            for (int i = 0; i < 3; i++) {
+                double diff = a[i] - b[i];
+                if (Math.abs(diff) > EPS) return diff < 0 ? -1 : 1;
+            }
+            // 最后比较 rotPref
+            double diff = a[3] - b[3];
+            if (Math.abs(diff) > EPS) return diff < 0 ? -1 : 1;
+            return 0;
         }
 
         private double calculateWaste(FreeRectangle rect, double w, double h) {
@@ -180,43 +210,31 @@ public class GuillotineCuttingService implements IPlaneService {
         }
 
         private double getSquareRatio(FreeRectangle r) {
-            if (r == null || r.area() == 0) return 0;
+            if (r == null || r.area() == 0) return Double.MAX_VALUE;
             double ratio = Math.max(r.width, r.height) / Math.min(r.width, r.height);
             return ratio;
         }
 
         // ========== 内部类 ==========
-
         public static class FreeRectangle {
             double x, y, width, height;
-
             public FreeRectangle(double x, double y, double width, double height) {
-                this.x = x;
-                this.y = y;
-                this.width = width;
-                this.height = height;
+                this.x = x; this.y = y; this.width = width; this.height = height;
             }
-
-            public double area() {
-                return width * height;
-            }
+            public double area() { return width * height; }
         }
 
         public static class Placement {
             public double x, y, w, h;
             public boolean rotated;
-            public int rectIndex; // 在 freeRects 中的索引
-
+            public int rectIndex;
             public Placement(double x, double y, double w, double h, boolean rotated, int rectIndex) {
-                this.x = x;
-                this.y = y;
-                this.w = w;
-                this.h = h;
-                this.rotated = rotated;
-                this.rectIndex = rectIndex;
+                this.x = x; this.y = y; this.w = w; this.h = h; this.rotated = rotated; this.rectIndex = rectIndex;
             }
         }
     }
+
+
 
     // ========== 工具方法 ==========
 
